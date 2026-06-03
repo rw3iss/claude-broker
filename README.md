@@ -69,8 +69,9 @@ from GitHub instead. Equivalent long form:
 curl -fsSL https://raw.githubusercontent.com/rw3iss/claude-broker/main/install.sh | bash -s -- --update
 ```
 
-Installer flags: `--prefix`, `--bin-dir`, `--ref`, `--repo`. Same names work
-on `claude-broker update`. Run with `--help` for all options.
+Installer flags: `--shell-init` (wire the `cll` launcher into your shell rc),
+`--prefix`, `--bin-dir`, `--ref`, `--repo`. Same names work on
+`claude-broker update`. Run with `--help` for all options.
 For a manual install from a working tree see [Development](#development).
 
 ## Daemon
@@ -344,10 +345,20 @@ CLAUDE_BROKER_LOG_SESSIONS=1 claude-broker daemon start --detach
 
 ### Launch + log a full session (the `cll` shortcut)
 
-Add the launcher to your shell profile once:
+Add the launcher to your shell **rc** once — `~/.bashrc` (bash) or `~/.zshrc`
+(zsh), **not** `~/.bash_profile`. New terminals are non-login shells that read
+`.bashrc`/`.zshrc`; `.bash_profile` is only read by login shells, so a function
+defined there won't exist in new tabs:
 
 ```bash
-eval "$(claude-broker shell-init)"   # defines a `cll` function
+echo 'eval "$(claude-broker shell-init)"' >> ~/.bashrc   # or ~/.zshrc
+exec $SHELL                                              # reload (or open a new terminal)
+```
+
+Or let the installer wire it up for you:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/rw3iss/claude-broker/main/install.sh | bash -s -- --shell-init
 ```
 
 Then start a logged, fully-interactive session in one command:

@@ -8,6 +8,7 @@
 #
 # Flags:
 #   --update           Pull the latest source in an existing install and rebuild.
+#   --shell-init       Add the `cll` launcher to your shell rc (.bashrc/.zshrc).
 #   --prefix DIR       Override install prefix (default: ~/.local/share/claude-broker).
 #   --bin-dir DIR      Override bin symlink dir (default: ~/.local/bin).
 #   --ref REF          Git ref to check out (branch / tag / SHA). Default: main.
@@ -22,6 +23,7 @@ BIN_DIR_DEFAULT="${HOME}/.local/bin"
 REF_DEFAULT="main"
 
 UPDATE=0
+SHELL_INIT=0
 PREFIX="${CLAUDE_BROKER_PREFIX:-$PREFIX_DEFAULT}"
 BIN_DIR="${CLAUDE_BROKER_BIN_DIR:-$BIN_DIR_DEFAULT}"
 REF="${CLAUDE_BROKER_REF:-$REF_DEFAULT}"
@@ -34,6 +36,7 @@ usage() {
 while [ $# -gt 0 ]; do
   case "$1" in
     --update) UPDATE=1; shift ;;
+    --shell-init) SHELL_INIT=1; shift ;;
     --prefix) PREFIX="$2"; shift 2 ;;
     --bin-dir) BIN_DIR="$2"; shift 2 ;;
     --ref) REF="$2"; shift 2 ;;
@@ -42,6 +45,19 @@ while [ $# -gt 0 ]; do
     *) echo "unknown option: $1" >&2; usage; exit 2 ;;
   esac
 done
+
+# Resolve the interactive shell's rc file for the cll launcher. New terminals
+# are non-login shells, so the eval must live in .bashrc / .zshrc (NOT
+# .bash_profile, which only login shells read).
+shell_rc() {
+  case "$(basename "${SHELL:-/bin/bash}")" in
+    zsh)  echo "$HOME/.zshrc" ;;
+    bash) echo "$HOME/.bashrc" ;;
+    *)    echo "" ;;
+  esac
+}
+
+CLL_LINE='eval "$(claude-broker shell-init)"'
 
 log() { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33mwarn:\033[0m %s\n' "$*" >&2; }
@@ -187,6 +203,31 @@ else
 
   Update later with:
     claude-broker update
+
+EOF
+fi
+
+# cll launcher (start + log a Claude session in one command). New terminals are
+# non-login shells that read .bashrc/.zshrc — so the eval goes THERE, never in
+# .bash_profile (login-only). --shell-init wires it automatically.
+RC="$(shell_rc)"
+if [ "$SHELL_INIT" -eq 1 ]; then
+  if [ -z "$RC" ]; then
+    warn "couldn't detect your shell rc; add manually:  $CLL_LINE"
+  elif grep -qF 'claude-broker shell-init' "$RC" 2>/dev/null; then
+    log "cll launcher already enabled in $RC"
+  else
+    printf '\n# claude-broker cll launcher\n%s\n' "$CLL_LINE" >> "$RC"
+    log "enabled the cll launcher in $RC — restart your shell or: source $RC"
+  fi
+elif [ -n "$RC" ] && grep -qF 'claude-broker shell-init' "$RC" 2>/dev/null; then
+  : # already enabled — stay quiet
+else
+  cat <<EOF
+  Optional — enable the 'cll' launcher (start + log a Claude session):
+    echo '$CLL_LINE' >> ${RC:-~/.bashrc}
+    # then restart your shell. Use ~/.bashrc or ~/.zshrc — NOT ~/.bash_profile
+    # (login-only). Or re-run the installer with --shell-init to do it for you.
 
 EOF
 fi
