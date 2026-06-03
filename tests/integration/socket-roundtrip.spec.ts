@@ -148,6 +148,26 @@ describe('SocketServer integration', () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
+  it('refuses to take over a socket that a live broker is already listening on', async () => {
+    // `server` is already listening on socketPath (beforeEach). A second
+    // SocketServer on the same path must NOT steal it (which would leave the
+    // path pointing at a dead inode → ECONNREFUSED for new shims).
+    const intruder = new SocketServer({
+      service,
+      sessions,
+      clock: realClock,
+      logger: silentLogger(),
+      socketPath,
+    });
+    await expect(intruder.listen()).rejects.toThrow(/already listening/);
+    // The original is unharmed — a client still connects + registers.
+    const client = await clientConnect(socketPath);
+    client.send({ v: WIRE_VERSION, type: 'register', sessionId: 'still-ok' });
+    const reg = await client.waitFor((m: any) => m.type === 'registered');
+    expect(reg.sessionId).toBe('still-ok');
+    client.close();
+  });
+
   it('register → dispatch → toolCall (complete_job) → toolResult roundtrip', async () => {
     const client = await clientConnect(socketPath);
     client.send({ v: WIRE_VERSION, type: 'register', sessionId: 'sess-1', label: 'foo' });

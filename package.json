@@ -1,6 +1,6 @@
 {
   "name": "claude-broker",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Long-running local daemon that bridges Claude Code sessions and HTTP clients via the Claude Code channels MCP protocol",
   "license": "MIT",
   "type": "module",

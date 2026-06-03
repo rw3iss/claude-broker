@@ -1,6 +1,3 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { Command } from 'commander';
 import { daemonCommand } from './daemon.js';
 import { jobsCommand } from './jobs.js';
@@ -10,19 +7,9 @@ import { shimCommand } from './shim.js';
 import { updateCommand } from './update.js';
 import { logsCommand } from './logs.js';
 import { shellInitCommand } from './shell-init.js';
+import { packageVersion } from '../lib/version.js';
 
-const PKG_VERSION = (() => {
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  for (const candidate of [
-    path.resolve(here, '..', '..', '..', 'package.json'),
-    path.resolve(here, '..', '..', '..', '..', 'package.json'),
-  ]) {
-    try {
-      return JSON.parse(fs.readFileSync(candidate, 'utf8')).version as string;
-    } catch {}
-  }
-  return '0.0.0';
-})();
+const PKG_VERSION = packageVersion();
 
 const program = new Command()
   .name('claude-broker')

@@ -92,16 +92,20 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
   });
   sweeper.start();
 
+  // Bind HTTP *before* the unix socket. If a second daemon starts while one is
+  // already running, the HTTP port conflict (EADDRINUSE) fails it fast — before
+  // it can touch the shared socket file. (SocketServer.listen also refuses to
+  // unlink a socket that still has a live listener; this is the first guard.)
   let httpAddress = '';
-  if (opts.startSocket !== false) {
-    await socket.listen();
-  }
   if (opts.startHttp !== false) {
     const result = await http.listen(
       config.broker.http.host,
       config.broker.http.port,
     );
     httpAddress = result.address;
+  }
+  if (opts.startSocket !== false) {
+    await socket.listen();
   }
 
   logger.info(

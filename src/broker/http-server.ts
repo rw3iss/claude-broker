@@ -12,6 +12,7 @@ import type { SseBus } from './sse-bus.js';
 import type { Authenticator } from './auth.js';
 import { DomainError, UnauthorizedError } from '../lib/errors.js';
 import { toIso, toIsoOrNull } from '../lib/time.js';
+import { packageVersion } from '../lib/version.js';
 import {
   CommentBodySchema,
   ListJobsQuerySchema,
@@ -21,7 +22,7 @@ import {
 } from './schemas.js';
 import { TERMINAL_STATUSES, type Job, type JobStatus } from '../ports/types.js';
 
-const PACKAGE_VERSION = '0.1.0';
+const PACKAGE_VERSION = packageVersion();
 
 export interface SpawnSessionFn {
   (input: { label: string; cwd?: string; env?: Record<string, string> }): Promise<{

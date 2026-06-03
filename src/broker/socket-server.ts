@@ -59,6 +59,15 @@ export class SocketServer implements DispatchSink {
   async listen(): Promise<void> {
     if (this.listening) return;
     if (fs.existsSync(this.socketPath)) {
+      // Don't steal a socket that another broker is still listening on — that
+      // leaves the path pointing at a dead inode (ECONNREFUSED for every new
+      // shim). Only unlink when the existing socket is truly stale.
+      if (await this.socketHasLiveListener()) {
+        throw new Error(
+          `another process is already listening on ${this.socketPath}; ` +
+            `refusing to take over (stop the running broker first)`,
+        );
+      }
       try {
         fs.unlinkSync(this.socketPath);
       } catch (err) {
@@ -99,6 +108,25 @@ export class SocketServer implements DispatchSink {
     } catch {
       // best effort
     }
+  }
+
+  /**
+   * Probe an existing socket file: resolves true if something is actively
+   * accepting connections on it, false if the connection is refused (stale
+   * file from a dead process) or times out.
+   */
+  private socketHasLiveListener(): Promise<boolean> {
+    return new Promise((resolve) => {
+      const probe = net.connect(this.socketPath);
+      const finish = (alive: boolean): void => {
+        probe.removeAllListeners();
+        probe.destroy();
+        resolve(alive);
+      };
+      probe.once('connect', () => finish(true));
+      probe.once('error', () => finish(false));
+      probe.setTimeout(500, () => finish(false));
+    });
   }
 
   /** DispatchSink — called by JobDispatcher. */
