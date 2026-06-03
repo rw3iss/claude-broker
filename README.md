@@ -307,6 +307,18 @@ cll trader      # label defaults to "default"
 and the transcript land in the same `<log-dir>/trader/` folder. (A standalone
 `scripts/cll.sh` is also provided if you'd rather not touch your profile.)
 
+Transcript capture needs the `script` tool (it runs Claude in a pty so the TUI
+stays interactive). It's preinstalled on most desktops but missing on minimal
+servers — recent Fedora split it into its own package:
+
+```bash
+sudo dnf install -y util-linux-script     # Fedora
+sudo apt  install -y bsdutils             # Debian/Ubuntu
+```
+
+If `script` is absent, `cll` still launches Claude (and the daemon job log
+keeps working) — it just skips the transcript and prints the install hint.
+
 ### View, follow, and clear logs
 
 ```bash

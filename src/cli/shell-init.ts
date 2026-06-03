@@ -31,18 +31,26 @@ ${fn}() {
   ts="$(date +%Y%m%d-%H%M%S)"
   file="$dir/transcript-$ts.log"
   cmd="claude --dangerously-skip-permissions --dangerously-load-development-channels server:claude-broker"
-  printf 'claude-broker: session %s\\n  transcript: %s\\n  watch:      claude-broker logs %s --transcript -f\\n  job log:    claude-broker logs %s -f\\n' "$label" "$file" "$label" "$label"
-  # Run Claude inside a pty so the TUI stays interactive while everything is
-  # captured to the transcript file. Session id/label are pinned to the log
-  # label so the daemon's job log lands in the same <dir>.
-  if script --version >/dev/null 2>&1; then
-    # util-linux script
-    CLAUDE_BROKER_SESSION_ID="$label" CLAUDE_BROKER_SESSION_LABEL="$label" \\
-      script -q -e -f -c "$cmd" "$file"
+  # Pin session id/label to the log name so the daemon's job log lands in the
+  # same <dir>. Inline env (no export) keeps these out of the calling shell.
+  if command -v script >/dev/null 2>&1; then
+    # Run Claude inside a pty so the TUI stays interactive while the full
+    # session is captured to the transcript file.
+    printf 'claude-broker: session %s\\n  transcript: %s\\n  watch:      claude-broker logs %s --transcript -f\\n  job log:    claude-broker logs %s -f\\n' "$label" "$file" "$label" "$label"
+    if script --version >/dev/null 2>&1; then
+      CLAUDE_BROKER_SESSION_ID="$label" CLAUDE_BROKER_SESSION_LABEL="$label" \\
+        script -q -e -f -c "$cmd" "$file"      # util-linux
+    else
+      CLAUDE_BROKER_SESSION_ID="$label" CLAUDE_BROKER_SESSION_LABEL="$label" \\
+        script -q "$file" $cmd                 # BSD/macOS
+    fi
   else
-    # BSD/macOS script
-    CLAUDE_BROKER_SESSION_ID="$label" CLAUDE_BROKER_SESSION_LABEL="$label" \\
-      script -q "$file" $cmd
+    # No 'script' tool — launch without a transcript. The daemon job log still
+    # captures job I/O. Install 'script' for full-transcript capture:
+    #   Fedora: sudo dnf install -y util-linux-script
+    #   Debian/Ubuntu: sudo apt install -y bsdutils
+    printf 'claude-broker: session %s (no transcript: the "script" tool is not installed)\\n  enable transcripts -> Fedora: sudo dnf install -y util-linux-script | Debian: sudo apt install -y bsdutils\\n  job log:    claude-broker logs %s -f\\n' "$label" "$label"
+    CLAUDE_BROKER_SESSION_ID="$label" CLAUDE_BROKER_SESSION_LABEL="$label" $cmd
   fi
 }
 `;

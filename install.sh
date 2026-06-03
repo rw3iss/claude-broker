@@ -149,9 +149,12 @@ case ":$PATH:" in
   *) ON_PATH=0 ;;
 esac
 
+ACTION="installed"
+[ "$UPDATE" -eq 1 ] && ACTION="updated"
+
 cat <<EOF
 
-  claude-broker v${INSTALLED_VERSION} installed.
+  claude-broker v${INSTALLED_VERSION} ${ACTION}.
 
   Source:    $PREFIX
   Binary:    $LINK_PATH
@@ -167,7 +170,14 @@ if [ "$ON_PATH" -eq 0 ]; then
 EOF
 fi
 
-cat <<'EOF'
+if [ "$UPDATE" -eq 1 ]; then
+  cat <<'EOF'
+  If the daemon is running, restart it to pick up the new build:
+    claude-broker daemon stop && claude-broker daemon start --detach
+
+EOF
+else
+  cat <<'EOF'
   Next steps:
     1. claude-broker daemon start
     2. Add this to ~/.claude.json (or your project .mcp.json):
@@ -176,6 +186,7 @@ cat <<'EOF'
          claude --dangerously-load-development-channels server:claude-broker
 
   Update later with:
-    curl -fsSL https://raw.githubusercontent.com/rw3iss/claude-broker/main/install.sh | bash -s -- --update
+    claude-broker update
 
 EOF
+fi

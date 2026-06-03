@@ -47,18 +47,11 @@ export function updateCommand(): Command {
           process.exit(1);
         }
 
+        // install.sh prints the "restart the daemon" hint itself on --update.
         const child = spawn('bash', [script, ...passthrough], {
           stdio: 'inherit',
         });
-        child.on('exit', (code) => {
-          if (code === 0) {
-            console.log(
-              '\nIf the daemon is running, restart it to pick up the new build:\n' +
-                '  claude-broker daemon stop && claude-broker daemon start --detach',
-            );
-          }
-          process.exit(code ?? 0);
-        });
+        child.on('exit', (code) => process.exit(code ?? 0));
         child.on('error', (err) => {
           console.error(`failed to spawn bash: ${err.message}`);
           process.exit(1);
@@ -89,16 +82,9 @@ function runRemoteInstaller(args: string[]): Promise<void> {
     const pipeline = `curl -fsSL ${REMOTE_INSTALLER} | bash -s -- ${args
       .map((a) => `'${a.replace(/'/g, `'\\''`)}'`)
       .join(' ')}`;
+    // install.sh prints the "restart the daemon" hint itself on --update.
     const child = spawn('bash', ['-c', pipeline], { stdio: 'inherit' });
-    child.on('exit', (code) => {
-      if (code === 0) {
-        console.log(
-          '\nIf the daemon is running, restart it to pick up the new build:\n' +
-            '  claude-broker daemon stop && claude-broker daemon start --detach',
-        );
-      }
-      process.exit(code ?? 0);
-    });
+    child.on('exit', (code) => process.exit(code ?? 0));
     child.on('error', (err) => {
       console.error(`failed to spawn bash: ${err.message}`);
       process.exit(1);

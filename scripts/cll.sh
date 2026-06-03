@@ -24,16 +24,23 @@ ts="$(date +%Y%m%d-%H%M%S)"
 file="$dir/transcript-$ts.log"
 cmd="claude --dangerously-skip-permissions --dangerously-load-development-channels server:claude-broker"
 
-printf 'claude-broker: session %s\n  transcript: %s\n  watch:      claude-broker logs %s --transcript -f\n  job log:    claude-broker logs %s -f\n' \
-  "$label" "$file" "$label" "$label"
-
 export CLAUDE_BROKER_SESSION_ID="$label"
 export CLAUDE_BROKER_SESSION_LABEL="$label"
 
-if script --version >/dev/null 2>&1; then
-  # util-linux script
-  exec script -q -e -f -c "$cmd" "$file"
+if command -v script >/dev/null 2>&1; then
+  printf 'claude-broker: session %s\n  transcript: %s\n  watch:      claude-broker logs %s --transcript -f\n  job log:    claude-broker logs %s -f\n' \
+    "$label" "$file" "$label" "$label"
+  if script --version >/dev/null 2>&1; then
+    exec script -q -e -f -c "$cmd" "$file"      # util-linux
+  else
+    exec script -q "$file" $cmd                 # BSD/macOS
+  fi
 else
-  # BSD/macOS script
-  exec script -q "$file" $cmd
+  # No 'script' tool — launch without a transcript. The daemon job log still
+  # captures job I/O. Install 'script' for full-transcript capture:
+  #   Fedora: sudo dnf install -y util-linux-script
+  #   Debian/Ubuntu: sudo apt install -y bsdutils
+  printf 'claude-broker: session %s (no transcript: the "script" tool is not installed)\n  enable transcripts -> Fedora: sudo dnf install -y util-linux-script | Debian: sudo apt install -y bsdutils\n  job log:    claude-broker logs %s -f\n' \
+    "$label" "$label"
+  exec $cmd
 fi
