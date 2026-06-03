@@ -75,26 +75,80 @@ For a manual install from a working tree see [Development](#development).
 
 ## Daemon
 
-### Start
+The broker is a long-lived background service. **Prefer a systemd service** to
+run it — it restarts on crash/boot and lets systemd own the socket cleanly. The
+manual `daemon start` commands are for development or quick tests.
 
-Foreground (logs to stdout):
+> The daemon is **not** the shim. `claude-broker shim` is the per-session MCP
+> subprocess that Claude Code spawns for you (see [MCP setup](#mcp-setup)) — you
+> never run it by hand. "Starting the daemon" only ever means the background
+> broker below.
 
-```bash
-claude-broker daemon start
+### systemd (recommended)
+
+Put the token and any logging env in `/etc/claude-broker.env`:
+
+```ini
+CLAUDE_BROKER_TOKEN=replace-with-a-secret
+# Turn per-session job logging on by default for the daemon:
+CLAUDE_BROKER_LOG_SESSIONS=1
+# Optional overrides:
+# CLAUDE_BROKER_LOG_DIR=/var/log/claude-broker
+# CLAUDE_BROKER_LOG_MAX_BYTES=5242880
+# CLAUDE_BROKER_LOG_RETAIN_DAYS=7
 ```
 
-Background (writes a pidfile under `$XDG_RUNTIME_DIR` or `/tmp`):
+`/etc/systemd/system/claude-broker.service`:
 
-```bash
-claude-broker daemon start --detach
+```ini
+[Unit]
+Description=claude-broker daemon
+After=network.target
+
+[Service]
+Type=simple
+User=youruser
+Group=youruser
+EnvironmentFile=/etc/claude-broker.env
+Environment=PATH=/home/youruser/.local/bin:/usr/local/bin:/usr/bin:/bin
+# Clear a stale socket left by an unclean shutdown before binding.
+ExecStartPre=/bin/rm -f /tmp/claude-broker.sock
+ExecStart=/home/youruser/.local/bin/claude-broker daemon start
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
 ```
 
-### Stop / status
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now claude-broker
+sudo systemctl status claude-broker
+journalctl -u claude-broker -f
+```
+
+Because `CLAUDE_BROKER_LOG_SESSIONS=1` is in the env file, session logging is on
+for every session (equivalently, append `--log-sessions` to `ExecStart`). View
+it with `claude-broker logs <session>` — see [Session logging](#session-logging).
+
+No root? A user service works the same: drop the unit in
+`~/.config/systemd/user/`, drop `User=`/`Group=`, set
+`WantedBy=default.target`, and use `systemctl --user enable --now claude-broker`.
+
+### Manual (development)
 
 ```bash
-claude-broker daemon stop          # SIGTERM the pid in the pidfile
-claude-broker daemon status        # GET /healthz
+claude-broker daemon start                # foreground, logs to stdout
+claude-broker daemon start --detach       # background; pidfile under $XDG_RUNTIME_DIR or /tmp
+claude-broker daemon start --log-sessions # with session logging on
+claude-broker daemon stop                 # SIGTERM the pidfile's process
+claude-broker daemon status               # GET /healthz
 ```
+
+> Pick one owner. If a systemd service runs the daemon, don't also
+> `daemon start` by hand — the second one safely fails on the bound port
+> (it won't disturb the running daemon), but it's avoidable noise.
 
 ## MCP setup
 

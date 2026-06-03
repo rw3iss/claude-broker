@@ -2,44 +2,69 @@
 
 ## Running the broker
 
-For development:
+The broker is a long-lived background service. Run it under **systemd** — it
+restarts on crash/boot and owns the socket cleanly. Let systemd be the single
+owner; a stray `claude-broker daemon start` by hand just fails on the bound port
+(harmless since v0.5.2, but avoidable). The shim (`claude-broker shim`) is a
+separate per-session MCP subprocess Claude Code spawns — not something you start.
+
+For development only:
 
 ```bash
-pnpm dev
+pnpm dev                                   # foreground with file watch
+claude-broker daemon start --detach        # background; pidfile under $XDG_RUNTIME_DIR or /tmp
+claude-broker daemon stop                  # SIGTERM the pidfile's process
 ```
 
-For a persistent install:
+## systemd service (recommended)
 
-```bash
-pnpm build
-node dist/cli/index.js daemon start --detach
+Keep the token + logging env out of the unit, in `/etc/claude-broker.env`:
+
+```ini
+CLAUDE_BROKER_TOKEN=replace-with-a-secret
+CLAUDE_BROKER_LOG_SESSIONS=1          # session logging on by default
+# CLAUDE_BROKER_LOG_DIR=/var/log/claude-broker
+# CLAUDE_BROKER_LOG_MAX_BYTES=5242880
+# CLAUDE_BROKER_LOG_RETAIN_DAYS=7
 ```
 
-This forks into the background, writes a pidfile (default
-`$XDG_RUNTIME_DIR/claude-broker.pid`), and tails logs to
-`/tmp/claude-broker.log`. Stop it with `daemon stop`.
-
-## systemd user unit
-
-`~/.config/systemd/user/claude-broker.service`:
+`/etc/systemd/system/claude-broker.service`:
 
 ```ini
 [Unit]
-Description=Claude Channel Broker
+Description=claude-broker daemon
 After=network.target
 
 [Service]
 Type=simple
-Environment=CLAUDE_BROKER_TOKEN=...
-ExecStart=/usr/local/bin/claude-broker daemon start
-Restart=on-failure
+User=youruser
+Group=youruser
+EnvironmentFile=/etc/claude-broker.env
+Environment=PATH=/home/youruser/.local/bin:/usr/local/bin:/usr/bin:/bin
+# Clear a stale socket left by an unclean shutdown before binding.
+ExecStartPre=/bin/rm -f /tmp/claude-broker.sock
+ExecStart=/home/youruser/.local/bin/claude-broker daemon start
+Restart=always
 RestartSec=3
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target
 ```
 
-Enable with `systemctl --user enable --now claude-broker`.
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now claude-broker
+sudo systemctl status claude-broker
+journalctl -u claude-broker -f
+```
+
+A user service works without root: drop the unit in
+`~/.config/systemd/user/claude-broker.service`, remove `User=`/`Group=`, set
+`WantedBy=default.target`, and `systemctl --user enable --now claude-broker`.
+(For a user service to survive logout, `loginctl enable-linger youruser`.)
+
+After a code update, reload the build with `sudo systemctl restart claude-broker`
+— don't start a second daemon by hand.
 
 ## Configuration
 
