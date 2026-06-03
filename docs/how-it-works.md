@@ -152,6 +152,30 @@ on the SSE bus. The tool schemas the shim advertises live in
 | Shim repeatedly reconnects | leg 2 | Broker socket path mismatch, or the broker isn't running. `ls /tmp/claude-broker.sock` |
 | `version_mismatch` error in shim log | leg 2 | A v2 client hit a v1 broker (or vice versa). Bump or downgrade one side |
 
+## Session logging — what each layer can see
+
+A recurring question: can the daemon log the whole Claude conversation? No —
+and the leg model above is why. The broker only ever sees what crosses leg 2:
+the **job in** (`content` + `meta`, captured at `job.created`) and the **job
+out** (`result`/`error`/progress, captured when Claude calls the reply tools).
+Claude's reasoning, its `Read`/`Bash` tool use, and what it prints to its own
+terminal never reach the broker — those live entirely inside leg 3.
+
+So there are two logs, both off by default:
+
+| Log | Written by | Source | Contents |
+|---|---|---|---|
+| `<dir>/<session>/jobs.log` | daemon (`SessionLogger`) | SseBus job events | structured JSONL: input + output + progress |
+| `<dir>/<session>/transcript-<ts>.log` | `cll` launcher | `script` pty capture | the full interactive terminal session |
+
+`SessionLogger` (`src/broker/session-logger.ts`) is just another SseBus
+subscriber — the same bus the long-poll and `/stream` handlers use — so it
+adds no coupling to the job path. Writes go through `RollingLog`
+(`src/broker/rolling-log.ts`): a stable active `jobs.log` plus timestamped
+archives, so size stays bounded and `tail -F` (what `claude-broker logs -f`
+runs) follows across rotations. See the README "Session logging" section for
+the commands.
+
 ## Related docs
 
 - [architecture.md](./architecture.md) — module boundaries and SOLID accountability.

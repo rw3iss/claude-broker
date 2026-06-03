@@ -5,12 +5,15 @@ import { SocketServer } from './socket-server.js';
 import { StaticBearerAuthenticator } from './auth.js';
 import { Sweeper } from './sweeper.js';
 import { makeSpawnHelper } from './spawn.js';
+import { SessionLogger } from './session-logger.js';
+import { resolveLogDir } from '../lib/log-paths.js';
 
 export interface BrokerHandle {
   container: Container;
   http: BuiltHttpServer;
   socket: SocketServer;
   sweeper: Sweeper;
+  sessionLogger: SessionLogger | null;
   shutdown(reason?: string): Promise<void>;
   httpAddress: string;
 }
@@ -59,6 +62,19 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
 
   await container.dispatcher.start();
 
+  const sessionLogging = config.logging.sessions;
+  const logRoot = resolveLogDir(config);
+  let sessionLogger: SessionLogger | null = null;
+  if (sessionLogging.enabled) {
+    sessionLogger = new SessionLogger({
+      bus: container.bus,
+      logger: container.logger.child({ comp: 'session-log' }),
+      root: logRoot,
+      maxBytes: sessionLogging.max_bytes,
+    });
+    sessionLogger.start();
+  }
+
   const sweeper = new Sweeper({
     store: container.store,
     service: container.service,
@@ -68,6 +84,11 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
     intervalMs: config.broker.defaults.sweep_interval_sec * 1000,
     heartbeatTimeoutMs: config.broker.defaults.heartbeat_timeout_sec * 1000,
     orphanGraceMs: config.broker.defaults.orphan_grace_sec * 1000,
+    // Auto-retention: prune log files older than retain_days, if configured.
+    logRetention:
+      sessionLogging.enabled && sessionLogging.retain_days
+        ? { root: logRoot, retainDays: sessionLogging.retain_days }
+        : undefined,
   });
   sweeper.start();
 
@@ -96,10 +117,12 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
     http,
     socket,
     sweeper,
+    sessionLogger,
     httpAddress,
     async shutdown(reason = 'shutdown') {
       logger.info({ reason }, 'broker shutting down');
       sweeper.stop();
+      sessionLogger?.stop();
       await http.close();
       await socket.close();
       await container.dispose();

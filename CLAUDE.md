@@ -60,6 +60,13 @@ the Claude Code "channels" MCP protocol. Two processes:
 - New adapter: file under `src/adapters/<kind>/<name>.ts`, register
   in `src/lib/container.ts`, add to the contract test parameterization,
   document in `docs/adapters.md`.
+- Session logging (off by default): `src/broker/session-logger.ts` (SseBus
+  subscriber → structured job I/O) and `src/broker/rolling-log.ts` (size
+  rotation) write under the dir from `src/lib/log-paths.ts`
+  (`resolveLogDir`: `CLAUDE_BROKER_LOG_DIR` → config → default). The
+  `claude-broker logs` reader (`src/cli/logs.ts`) and the `cll` launcher
+  (`src/cli/shell-init.ts`) resolve the same dir. The daemon sees only job
+  in/out, never Claude's transcript — that's the `cll`/`script` layer.
 
 ## What to read first
 

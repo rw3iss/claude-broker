@@ -25,6 +25,16 @@ dispatch:
 logging:
   level: info
   pretty: true
+  # Per-session job I/O logging (the daemon's structured view: each job's
+  # input content + final result/error). Disabled by default. The full Claude
+  # terminal transcript is captured separately by the `cll` launcher — see the
+  # README "Session logging" section.
+  sessions:
+    enabled: ${CLAUDE_BROKER_LOG_SESSIONS:-false}
+    # dir defaults to ~/.local/state/claude-broker/logs; override with the
+    # CLAUDE_BROKER_LOG_DIR env var (takes precedence everywhere).
+    max_bytes: ${CLAUDE_BROKER_LOG_MAX_BYTES:-5242880}
+    retain_days: ${CLAUDE_BROKER_LOG_RETAIN_DAYS:-}
 
 instructions: |
   You have access to a "claude-broker" channel. Channel events arrive as

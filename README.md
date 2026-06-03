@@ -263,6 +263,82 @@ curl -X POST -H "Authorization: Bearer $CLAUDE_BROKER_TOKEN" \
   http://127.0.0.1:4180/jobs/<job_id>/comment
 ```
 
+## Session logging
+
+Two complementary logs, both **off by default**, sharing one per-session
+directory (`<log-dir>/<session>/`):
+
+- **Job I/O log** (`jobs.log`) — written by the **daemon**. The broker sees
+  every job's input (`content` + `meta`) and output (`result`/`error`/progress),
+  so this is a clean, structured JSONL record. It does **not** include Claude's
+  terminal chat — the channel only carries the job, not the conversation.
+- **Terminal transcript** (`transcript-<ts>.log`) — written by the **`cll`
+  launcher**, which runs Claude inside a pty (via `script`) so the TUI stays
+  interactive while the full session output is captured.
+
+Log dir precedence: `CLAUDE_BROKER_LOG_DIR` → `logging.sessions.dir` →
+`~/.local/state/claude-broker/logs`.
+
+### Enable daemon job logging
+
+```bash
+# Per-run flag…
+claude-broker daemon start --log-sessions
+# …or env (works with --detach, systemd, etc.)
+CLAUDE_BROKER_LOG_SESSIONS=1 claude-broker daemon start --detach
+```
+
+### Launch + log a full session (the `cll` shortcut)
+
+Add the launcher to your shell profile once:
+
+```bash
+eval "$(claude-broker shell-init)"   # defines a `cll` function
+```
+
+Then start a logged, fully-interactive session in one command:
+
+```bash
+cll trader      # label defaults to "default"
+# → prints the transcript path and the watch commands, then runs Claude live.
+```
+
+`cll` pins the session id/label to the log name, so the daemon's `jobs.log`
+and the transcript land in the same `<log-dir>/trader/` folder. (A standalone
+`scripts/cll.sh` is also provided if you'd rather not touch your profile.)
+
+### View, follow, and clear logs
+
+```bash
+claude-broker logs                      # the "default" session's job log
+claude-broker logs trader               # session "trader"'s job log
+claude-broker logs trader -n 50         # last 50 lines
+claude-broker logs trader -f            # live-follow — watch a session externally
+claude-broker logs trader --transcript  # the full Claude terminal transcript
+claude-broker logs trader --transcript -f   # follow the transcript live
+claude-broker logs trader --all         # include rolled archive segments
+claude-broker logs list                 # which sessions have logs, with sizes
+
+claude-broker logs clear trader              # delete session "trader"'s logs
+claude-broker logs clear --all               # delete every session's logs
+claude-broker logs clear --all --days-before 2   # only files older than 2 days
+```
+
+`claude-broker logs -h` prints the same examples. The command reads files
+directly, so it works even when the daemon is stopped. To **watch a session
+from another terminal**, just `claude-broker logs <session> -f` (job events) or
+`--transcript -f` (full chat).
+
+### Keeping files small (rotation + retention)
+
+Each session's active `jobs.log` rolls to a timestamped archive
+(`jobs.<ms>.log`) once it passes `CLAUDE_BROKER_LOG_MAX_BYTES` (default 5 MB),
+then a fresh `jobs.log` continues. The active file name stays stable, so
+`logs -f` (which uses `tail -F`) follows seamlessly across rolls, and archives
+are preserved for history. Set `CLAUDE_BROKER_LOG_RETAIN_DAYS` to have the
+daemon's sweeper auto-delete log files older than N days, or prune on demand
+with `logs clear --days-before N`.
+
 ## Configuration
 
 The broker reads YAML from `~/.config/claude-broker/config.yaml` (override with
@@ -301,6 +377,10 @@ Full schema and defaults live in [`config/default.yaml`](./config/default.yaml).
 | `dispatch.driver` | `inproc` | `inproc` or (stub) `bullmq` |
 | `logging.level` | `info` | `trace`/`debug`/`info`/`warn`/`error` |
 | `logging.pretty` | `true` | Human-readable vs JSON logs |
+| `logging.sessions.enabled` | `false` | Master switch for per-session job I/O logging |
+| `logging.sessions.dir` | `$HOME/.local/state/claude-broker/logs` | Log root (`CLAUDE_BROKER_LOG_DIR` wins) |
+| `logging.sessions.max_bytes` | `5242880` (5 MB) | Active `jobs.log` rolls to an archive past this size |
+| `logging.sessions.retain_days` | (unset) | If set, the sweeper auto-deletes log files older than this |
 | `instructions` | (see default.yaml) | Channel-protocol text appended to Claude's system prompt |
 | `instructions_append` | — | Optional project-specific guidance appended after `instructions` |
 
@@ -316,6 +396,10 @@ All variables read anywhere in the codebase, grouped by where they apply:
 | `CLAUDE_BROKER_SESSION_LABEL` | shim | Human-readable label assigned to the attached session. Recommended for label-based addressing. |
 | `CLAUDE_BROKER_SESSION_ID` | shim | Pre-assigned stable session id. Omit to auto-generate a nanoid. |
 | `CLAUDE_BROKER_INSTRUCTIONS_FILE` | shim | Path to a YAML file whose `instructions` (and optional `instructions_append`) override the shipped default. |
+| `CLAUDE_BROKER_LOG_SESSIONS` | daemon | `1`/`true` enables per-session job I/O logging (same as `--log-sessions`). Default off. |
+| `CLAUDE_BROKER_LOG_DIR` | daemon + `logs` cmd | Log root. Takes precedence over `logging.sessions.dir`. Default `~/.local/state/claude-broker/logs`. |
+| `CLAUDE_BROKER_LOG_MAX_BYTES` | daemon | Roll size for each session's active `jobs.log`. Default `5242880` (5 MB). |
+| `CLAUDE_BROKER_LOG_RETAIN_DAYS` | daemon | If set, the sweeper deletes log files older than this many days. |
 | `BROKER` | `examples/*` clients | Base URL for the broker. Default `http://127.0.0.1:4180`. |
 | `SESSION_LABEL` | `examples/webhook.ts` | Label every forwarded webhook job targets. |
 | `PORT` | `examples/webhook.ts` | Port the webhook forwarder listens on. Default `4191`. |
@@ -348,10 +432,13 @@ Schemas and full payload shapes: [docs/architecture.md](./docs/architecture.md).
 ## CLI reference
 
 ```
-claude-broker daemon {start,stop,status}
+claude-broker daemon {start,stop,status}    # start: --log-sessions, --log-dir
 claude-broker shim                          # invoked by Claude Code's MCP config
 claude-broker jobs {list,get,submit,cancel}
 claude-broker sessions {list,get,spawn,kill}
+claude-broker logs [session] [-n N|-f|--transcript|--all]
+claude-broker logs {list, clear [session] [--all] [--days-before N]}
+claude-broker shell-init [--name cll]       # print the cll launcher function
 claude-broker config {validate,show}
 claude-broker update [--ref REF] [--remote] # git-pull + rebuild this install
 ```

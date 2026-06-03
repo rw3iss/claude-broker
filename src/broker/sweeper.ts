@@ -3,6 +3,7 @@ import type { JobStore } from '../ports/job-store.js';
 import type { Logger } from '../ports/logger.js';
 import type { JobService } from './job-service.js';
 import type { SessionRegistry } from './session-registry.js';
+import { pruneLogsOlderThan } from './rolling-log.js';
 
 export interface SweeperOptions {
   store: JobStore;
@@ -18,6 +19,8 @@ export interface SweeperOptions {
   orphanGraceMs: number;
   /** Max rows processed per tick (defaults to 100). */
   batchSize?: number;
+  /** If set, each tick deletes session-log files older than retainDays. */
+  logRetention?: { root: string; retainDays: number };
   /** Called on every tick; useful for tests. */
   onTick?: () => void;
 }
@@ -32,6 +35,7 @@ export class Sweeper {
   private readonly heartbeatTimeoutMs: number;
   private readonly orphanGraceMs: number;
   private readonly batchSize: number;
+  private readonly logRetention: { root: string; retainDays: number } | undefined;
   private readonly onTick: (() => void) | undefined;
   private timer: NodeJS.Timeout | null = null;
 
@@ -45,6 +49,7 @@ export class Sweeper {
     this.heartbeatTimeoutMs = opts.heartbeatTimeoutMs;
     this.orphanGraceMs = opts.orphanGraceMs;
     this.batchSize = opts.batchSize ?? 100;
+    this.logRetention = opts.logRetention;
     this.onTick = opts.onTick;
   }
 
@@ -93,6 +98,18 @@ export class Sweeper {
           if (now - reference >= this.orphanGraceMs) {
             await this.service.markOrphaned(job.id);
           }
+        }
+      }
+
+      // 4. Retention: prune session-log files older than retain_days.
+      if (this.logRetention) {
+        const cutoff = now - this.logRetention.retainDays * 24 * 60 * 60 * 1000;
+        const deleted = pruneLogsOlderThan(this.logRetention.root, cutoff);
+        if (deleted.length > 0) {
+          this.logger.info(
+            { count: deleted.length, retainDays: this.logRetention.retainDays },
+            'pruned old session logs',
+          );
         }
       }
     } finally {

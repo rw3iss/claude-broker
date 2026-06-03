@@ -20,8 +20,16 @@ export function daemonCommand(): Command {
       .command('start')
       .description('Start the broker in the foreground (or --detach to background)')
       .option('--detach', 'fork into background and write a pidfile', false)
-      .option('--pidfile <path>', 'pidfile path', PID_FILE_DEFAULT),
-  ).action(async (opts: { config?: string; detach?: boolean; pidfile?: string }) => {
+      .option('--pidfile <path>', 'pidfile path', PID_FILE_DEFAULT)
+      .option('--log-sessions', 'enable per-session job I/O logging', false)
+      .option('--log-dir <path>', 'session log directory (overrides config + env)'),
+  ).action(async (opts: {
+    config?: string;
+    detach?: boolean;
+    pidfile?: string;
+    logSessions?: boolean;
+    logDir?: string;
+  }) => {
       if (opts.detach) {
         // Re-exec ourselves without --detach, detached.
         const args = process.argv.slice(2).filter((a) => a !== '--detach');
@@ -38,9 +46,19 @@ export function daemonCommand(): Command {
         console.log(`broker started in background; pid=${child.pid}`);
         return;
       }
+      // --log-dir wins over CLAUDE_BROKER_LOG_DIR by becoming it, so every
+      // resolveLogDir() call in this process agrees.
+      if (opts.logDir) process.env.CLAUDE_BROKER_LOG_DIR = opts.logDir;
       const config = loadConfig({ path: opts.config });
+      if (opts.logSessions) config.logging.sessions.enabled = true;
       const broker = await startBroker({ config });
       console.log(`broker listening on ${broker.httpAddress}`);
+      if (config.logging.sessions.enabled) {
+        const { resolveLogDir } = await import('../lib/log-paths.js');
+        console.log(
+          `session logging ON → ${resolveLogDir(config)}/<session>/jobs.log`,
+        );
+      }
       if (opts.pidfile && !opts.detach) {
         try {
           fs.writeFileSync(opts.pidfile, String(process.pid));
