@@ -3,13 +3,16 @@ import path from 'node:path';
 import { z } from 'zod';
 
 /**
- * Boolean that also accepts the string forms env interpolation produces
- * ("1"/"true"/"yes"/"on" → true; "0"/"false"/"no"/"off"/"" → false). Plain
- * `z.coerce.boolean()` is unusable here because any non-empty string — even
- * "false" — coerces to true.
+ * Boolean that also accepts the forms env interpolation produces. After
+ * `${VAR:-false}` is substituted into YAML, an unquoted `1` parses as the
+ * NUMBER 1 and `true` as a boolean — so we must handle numbers and strings,
+ * not just booleans. Accepts: true/1/"1"/"true"/"yes"/"on" → true;
+ * false/0/"0"/"false"/"no"/"off"/"" → false. Plain `z.coerce.boolean()` is
+ * unusable here because any non-empty string — even "false" — coerces to true.
  */
 const zBool = z.preprocess((v) => {
   if (typeof v === 'boolean') return v;
+  if (typeof v === 'number') return v !== 0;
   if (typeof v === 'string') {
     const s = v.trim().toLowerCase();
     if (['1', 'true', 'yes', 'on'].includes(s)) return true;

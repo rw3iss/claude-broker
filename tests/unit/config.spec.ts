@@ -41,6 +41,53 @@ describe('interpolateEnv', () => {
   });
 });
 
+describe('logging.sessions.enabled coercion', () => {
+  // After `${CLAUDE_BROKER_LOG_SESSIONS:-false}` interpolates, an unquoted `1`
+  // parses as a YAML NUMBER and `true` as a boolean — both must coerce.
+  const withSessions = (envExpr: string) => `
+broker:
+  http: { host: 127.0.0.1, port: 4180, auth_token: t }
+storage:
+  job_store: { driver: sqlite, sqlite: { path: /tmp/jobs.sqlite } }
+logging:
+  sessions:
+    enabled: ${envExpr}
+instructions: do
+`;
+
+  it('coerces numeric 1 (the env=1 case) to true', () => {
+    const cfg = loadConfigFromString(
+      withSessions('${CLAUDE_BROKER_LOG_SESSIONS:-false}'),
+      { CLAUDE_BROKER_LOG_SESSIONS: '1' },
+    );
+    expect(cfg.logging.sessions.enabled).toBe(true);
+  });
+
+  it('coerces numeric 0 to false', () => {
+    const cfg = loadConfigFromString(
+      withSessions('${CLAUDE_BROKER_LOG_SESSIONS:-false}'),
+      { CLAUDE_BROKER_LOG_SESSIONS: '0' },
+    );
+    expect(cfg.logging.sessions.enabled).toBe(false);
+  });
+
+  it('accepts the boolean form true', () => {
+    const cfg = loadConfigFromString(
+      withSessions('${CLAUDE_BROKER_LOG_SESSIONS:-false}'),
+      { CLAUDE_BROKER_LOG_SESSIONS: 'true' },
+    );
+    expect(cfg.logging.sessions.enabled).toBe(true);
+  });
+
+  it('defaults to false when unset', () => {
+    const cfg = loadConfigFromString(
+      withSessions('${CLAUDE_BROKER_LOG_SESSIONS:-false}'),
+      {},
+    );
+    expect(cfg.logging.sessions.enabled).toBe(false);
+  });
+});
+
 describe('loadConfigFromString', () => {
   it('parses a minimal valid config', () => {
     const cfg = loadConfigFromString(minimal, {});
