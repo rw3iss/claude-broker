@@ -16,6 +16,8 @@ export interface SpawnHelperOptions {
   logger: Logger;
   /** Path to the `claude` binary; defaults to "claude" on PATH. */
   claudeBinary?: string;
+  /** Channel passed to Claude's `--channels` flag; default `server:claude-broker`. */
+  channelArg?: string;
   /** How long to wait for the shim to attach. */
   timeoutMs?: number;
   /** Polling interval for attach detection. */
@@ -23,14 +25,16 @@ export interface SpawnHelperOptions {
 }
 
 /**
- * Best-effort helper that shells out to `claude` and waits for a shim with the
- * given label to attach (the session attaches via the registered `claude-broker`
- * shim MCP server — see `claude mcp add`). v1 uses plain child_process.spawn with
+ * Best-effort helper that shells out to `claude --channels <arg>` and waits for a
+ * shim with the given label to attach. The registered `claude-broker` shim MCP
+ * server (see `claude mcp add`) provides the job tools; `--channels` is what makes
+ * Claude process the pushed channel events. v1 uses plain child_process.spawn with
  * no pty, so an interactive Claude TUI may not initialise reliably headless —
- * prefer starting `claude` yourself (in tmux/screen). See the README.
+ * prefer starting `claude --channels server:claude-broker` yourself (in tmux). See the README.
  */
 export function makeSpawnHelper(opts: SpawnHelperOptions) {
   const claudeBinary = opts.claudeBinary ?? 'claude';
+  const channelArg = opts.channelArg ?? 'server:claude-broker';
   const timeoutMs = opts.timeoutMs ?? 30_000;
   const pollIntervalMs = opts.pollIntervalMs ?? 250;
 
@@ -43,7 +47,7 @@ export function makeSpawnHelper(opts: SpawnHelperOptions) {
       CLAUDE_BROKER_SESSION_LABEL: input.label,
     };
 
-    const child = spawn(claudeBinary, [], {
+    const child = spawn(claudeBinary, ['--channels', channelArg], {
       cwd: input.cwd,
       env,
       detached: true,

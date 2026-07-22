@@ -18,7 +18,7 @@ For a protocol-level walkthrough (HTTP → unix socket → MCP → Claude, end-t
 
 ## Requirements
 
-- Claude Code v2.1.80+ — the broker attaches through a **standard MCP server**; no preview flags.
+- Claude Code v2.1.80+ — sessions run with `--channels server:claude-broker` (the shim is a standard MCP server; the deprecated `--dangerously-load-development-channels` flag is **not** used).
 - Node.js 20+
 - `openssl` (to mint a token), and `claude` logged in to your account.
 
@@ -39,9 +39,10 @@ claude mcp add claude-broker -s user \
   -e CLAUDE_BROKER_SESSION_LABEL=default \
   -- claude-broker shim
 
-# 4. Start a NORMAL Claude session — the shim attaches it to the broker on startup.
-claude
-#   inside Claude, `/mcp` should now list "claude-broker"
+# 4. Start a Claude session with the broker channel enabled. The shim (step 3) provides
+#    the job tools; --channels is what makes Claude actually process the pushed jobs.
+claude --channels server:claude-broker
+#   inside Claude, `/mcp` should list "claude-broker"
 
 # 5. Verify the session attached
 curl -s http://127.0.0.1:4180/healthz        # → {"ok":true, ... ,"sessionCount":1}
@@ -53,9 +54,12 @@ curl -sS -X POST http://127.0.0.1:4180/jobs \
   -d '{"session_label":"default","content":"What time is it?"}'
 ```
 
-> **No `--dangerously-load-development-channels` flag is needed** — that path is
-> deprecated and no longer attaches in current Claude Code. The shim is a plain
-> MCP server: register it (step 3) and start a normal `claude` (step 4). That's it.
+> **Use `--channels server:claude-broker`, not `--dangerously-load-development-channels`** —
+> the latter is the deprecated preview flag. Two things are required and do different
+> jobs: the shim **MCP server** (step 3) provides the `complete_job`/`note_progress`
+> tools, and the **`--channels`** flag (step 4) is what makes Claude actually process the
+> jobs the broker pushes. Plain `claude` (no `--channels`) attaches fine but silently never
+> runs jobs — they go `dispatched`, then `expired`.
 
 ## Initialize on a server (persistent)
 
@@ -71,7 +75,7 @@ must be shared with any service that submits jobs.
 4. **Start the session in tmux** so it outlives your shell:
    ```bash
    tmux new -s broker
-   claude          # `/mcp` lists claude-broker; leave it running, detach with Ctrl-b d
+   claude --channels server:claude-broker   # /mcp lists claude-broker; leave running, detach Ctrl-b d
    ```
 5. **Point your app at the broker.** Any service that submits jobs (an API gateway,
    a worker) needs `CLAUDE_BROKER_URL=http://127.0.0.1:4180` and the **same**
@@ -237,16 +241,21 @@ controls.
 
 ## Starting a Claude session
 
-Once the shim MCP server is registered, just start Claude normally — the shim
-attaches the session to the broker on startup:
+Once the shim MCP server is registered, start Claude with the broker channel
+enabled — the shim attaches the session and provides the tools, and `--channels`
+lets Claude process the pushed jobs:
 
 ```bash
-claude
+claude --channels server:claude-broker
 ```
 
 Inside Claude, `/mcp` lists **claude-broker** when it's attached. From another
 shell, `claude-broker sessions list` (or `GET /healthz` → `sessionCount`) confirms
 it. On a server, run this inside `tmux`/`screen` so the session persists.
+
+> Without `--channels`, the session still attaches (shows in `/mcp`) but never
+> runs jobs — they dispatch and expire. If jobs sit unprocessed, this flag is
+> almost always why.
 
 ### Pinning a session id
 
@@ -409,7 +418,7 @@ Or by hand, without touching your profile (equivalent to `scripts/cll.sh`):
 ```bash
 label=trader
 dir="$HOME/.local/state/claude-broker/logs/$label"; mkdir -p "$dir"
-script -q -e -f -c "claude --dangerously-skip-permissions" "$dir/transcript-$(date +%Y%m%d-%H%M%S).log"
+script -q -e -f -c "claude --dangerously-skip-permissions --channels server:claude-broker" "$dir/transcript-$(date +%Y%m%d-%H%M%S).log"
 ```
 
 `script` is preinstalled on most desktops but missing on minimal servers —
@@ -595,9 +604,17 @@ Needs `node-gyp`, `python3`, `make`, a C++ compiler. Fedora:
 `sudo apt install -y python3 make g++`.
 
 **`session not found` on submit** — no session is attached for that label.
-Confirm the shim MCP server is registered (`claude mcp add …`, and `/mcp` lists
-**claude-broker** inside Claude), then start a normal `claude` session and
+Confirm the shim MCP server is registered (`claude mcp add …`, `/mcp` lists
+**claude-broker**), then start `claude --channels server:claude-broker` and
 re-submit. On a server, keep it running in `tmux`.
+
+**Jobs go `dispatched` then `expired`, never `completed`** — the session is
+attached but Claude isn't processing the pushed events. Almost always the
+session was started **without `--channels server:claude-broker`** (plain `claude`
+attaches but ignores channel jobs). Restart it with the flag. Also make sure only
+**one** session holds the target label — a stale/detached duplicate can win the
+label pick and swallow jobs (`claude-broker sessions list`; submit by `--session <id>`
+to be exact).
 
 **`401 unauthorized`** — the `CLAUDE_BROKER_TOKEN` the client (or shim) sends
 doesn't match the daemon's. It must be identical in the daemon's env/config,

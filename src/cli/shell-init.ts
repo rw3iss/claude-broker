@@ -31,7 +31,7 @@ ${fn}() {
   local ts file cmd
   ts="$(date +%Y%m%d-%H%M%S)"
   file="$dir/transcript-$ts.log"
-  cmd="claude --dangerously-skip-permissions"
+  cmd="claude --dangerously-skip-permissions --channels server:claude-broker"
   # Pin session id/label to the log name so the daemon's job log lands in the
   # same <dir>. Inline env (no export) keeps these out of the calling shell.
   if command -v script >/dev/null 2>&1; then

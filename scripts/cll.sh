@@ -22,7 +22,7 @@ mkdir -p "$dir"
 
 ts="$(date +%Y%m%d-%H%M%S)"
 file="$dir/transcript-$ts.log"
-cmd="claude --dangerously-skip-permissions"
+cmd="claude --dangerously-skip-permissions --channels server:claude-broker"
 
 export CLAUDE_BROKER_SESSION_ID="$label"
 export CLAUDE_BROKER_SESSION_LABEL="$label"
