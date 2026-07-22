@@ -18,7 +18,7 @@ For a protocol-level walkthrough (HTTP → unix socket → MCP → Claude, end-t
 
 ## Requirements
 
-- Claude Code v2.1.80+ — sessions run with `--channels server:claude-broker` (the shim is a standard MCP server; the deprecated `--dangerously-load-development-channels` flag is **not** used).
+- Claude Code v2.1.80+ — sessions run with `--dangerously-load-development-channels server:claude-broker` and you accept its one-time prompt; the shim is a standard MCP server registered via `claude mcp add`.
 - Node.js 20+
 - `openssl` (to mint a token), and `claude` logged in to your account.
 
@@ -39,10 +39,11 @@ claude mcp add claude-broker -s user \
   -e CLAUDE_BROKER_SESSION_LABEL=default \
   -- claude-broker shim
 
-# 4. Start a Claude session with the broker channel enabled. The shim (step 3) provides
-#    the job tools; --channels is what makes Claude actually process the pushed jobs.
-claude --channels server:claude-broker
-#   inside Claude, `/mcp` should list "claude-broker"
+# 4. Start a Claude session with the broker channel enabled, and ACCEPT the one-time
+#    "Loading development channels" prompt — that acceptance is what authorizes the channel.
+claude --dangerously-skip-permissions --dangerously-load-development-channels server:claude-broker
+#   → select "I am using this for local development", press Enter.
+#   /mcp lists "claude-broker"; the channel banner shows server:claude-broker with NO warning line.
 
 # 5. Verify the session attached
 curl -s http://127.0.0.1:4180/healthz        # → {"ok":true, ... ,"sessionCount":1}
@@ -54,12 +55,19 @@ curl -sS -X POST http://127.0.0.1:4180/jobs \
   -d '{"session_label":"default","content":"What time is it?"}'
 ```
 
-> **Use `--channels server:claude-broker`, not `--dangerously-load-development-channels`** —
-> the latter is the deprecated preview flag. Two things are required and do different
-> jobs: the shim **MCP server** (step 3) provides the `complete_job`/`note_progress`
-> tools, and the **`--channels`** flag (step 4) is what makes Claude actually process the
-> jobs the broker pushes. Plain `claude` (no `--channels`) attaches fine but silently never
-> runs jobs — they go `dispatched`, then `expired`.
+> **Two things are required, and both are easy to get subtly wrong:**
+> (1) the shim **MCP server** (step 3) provides the `complete_job` / `note_progress` tools; and
+> (2) `--dangerously-load-development-channels server:claude-broker` **plus accepting the
+> confirmation** authorizes the channel so Claude injects the pushed jobs.
+>
+> Two gotchas that silently break it (jobs attach but go `dispatched → expired`):
+> - **Don't also pass `--channels`** for the same channel — it adds a second, *un-authorized*
+>   copy that Claude ignores (you'll see the channel listed twice with a persistent
+>   *"server: entries need --dangerously-load-development-channels"* warning). The dev-channels
+>   flag alone is correct.
+> - **You must accept the prompt.** Acceptance is literally what sets the channel's `dev` flag
+>   (Claude Code gates `server:` channels on it). A session left at the prompt, or launched
+>   headless where it can't be accepted, never authorizes — so no `<channel>` events arrive.
 
 ## Initialize on a server (persistent)
 
@@ -75,7 +83,8 @@ must be shared with any service that submits jobs.
 4. **Start the session in tmux** so it outlives your shell:
    ```bash
    tmux new -s broker
-   claude --channels server:claude-broker   # /mcp lists claude-broker; leave running, detach Ctrl-b d
+   claude --dangerously-skip-permissions --dangerously-load-development-channels server:claude-broker
+   #  → accept the "Loading development channels" prompt; leave it running; detach with Ctrl-b d
    ```
 5. **Point your app at the broker.** Any service that submits jobs (an API gateway,
    a worker) needs `CLAUDE_BROKER_URL=http://127.0.0.1:4180` and the **same**
@@ -242,20 +251,22 @@ controls.
 ## Starting a Claude session
 
 Once the shim MCP server is registered, start Claude with the broker channel
-enabled — the shim attaches the session and provides the tools, and `--channels`
-lets Claude process the pushed jobs:
+enabled and **accept the confirmation prompt** (that acceptance authorizes the
+`server:` channel — see the gotchas in [Quick start](#quick-start)):
 
 ```bash
-claude --channels server:claude-broker
+claude --dangerously-skip-permissions --dangerously-load-development-channels server:claude-broker
+# → "Loading development channels": select "I am using this for local development", Enter
 ```
 
-Inside Claude, `/mcp` lists **claude-broker** when it's attached. From another
-shell, `claude-broker sessions list` (or `GET /healthz` → `sessionCount`) confirms
-it. On a server, run this inside `tmux`/`screen` so the session persists.
+Inside Claude, `/mcp` lists **claude-broker**, and the channel banner should show
+`server:claude-broker` **once with no warning**. From another shell,
+`claude-broker sessions list` (or `GET /healthz` → `sessionCount`) confirms the
+attach. On a server, run this inside `tmux`/`screen` so the session persists.
 
-> Without `--channels`, the session still attaches (shows in `/mcp`) but never
-> runs jobs — they dispatch and expire. If jobs sit unprocessed, this flag is
-> almost always why.
+> If the banner still shows *"server: entries need --dangerously-load-development-channels"*,
+> the channel isn't authorized — you either also passed `--channels` (drop it) or didn't
+> accept the prompt. Until it's authorized, jobs attach but go `dispatched → expired`.
 
 ### Pinning a session id
 
@@ -418,7 +429,7 @@ Or by hand, without touching your profile (equivalent to `scripts/cll.sh`):
 ```bash
 label=trader
 dir="$HOME/.local/state/claude-broker/logs/$label"; mkdir -p "$dir"
-script -q -e -f -c "claude --dangerously-skip-permissions --channels server:claude-broker" "$dir/transcript-$(date +%Y%m%d-%H%M%S).log"
+script -q -e -f -c "claude --dangerously-skip-permissions --dangerously-load-development-channels server:claude-broker" "$dir/transcript-$(date +%Y%m%d-%H%M%S).log"
 ```
 
 `script` is preinstalled on most desktops but missing on minimal servers —
@@ -605,16 +616,20 @@ Needs `node-gyp`, `python3`, `make`, a C++ compiler. Fedora:
 
 **`session not found` on submit** — no session is attached for that label.
 Confirm the shim MCP server is registered (`claude mcp add …`, `/mcp` lists
-**claude-broker**), then start `claude --channels server:claude-broker` and
-re-submit. On a server, keep it running in `tmux`.
+**claude-broker**), then start `claude --dangerously-skip-permissions
+--dangerously-load-development-channels server:claude-broker` (accept the prompt)
+and re-submit. On a server, keep it running in `tmux`.
 
 **Jobs go `dispatched` then `expired`, never `completed`** — the session is
-attached but Claude isn't processing the pushed events. Almost always the
-session was started **without `--channels server:claude-broker`** (plain `claude`
-attaches but ignores channel jobs). Restart it with the flag. Also make sure only
-**one** session holds the target label — a stale/detached duplicate can win the
-label pick and swallow jobs (`claude-broker sessions list`; submit by `--session <id>`
-to be exact).
+attached but the channel isn't **authorized**, so the pushed events never inject.
+Check the channel banner: if it shows *"server: entries need
+--dangerously-load-development-channels"*, the channel is `dev:false`. Fix it by
+(a) launching with `--dangerously-load-development-channels server:claude-broker`,
+(b) **accepting** the "Loading development channels" prompt (that's what sets `dev`),
+and (c) **not** also passing `--channels` for the same channel (the duplicate stays
+un-authorized and keeps the warning). Also make sure only **one** session holds the
+target label — a stale/detached duplicate can win the label pick and swallow jobs
+(`claude-broker sessions list`; submit by `--session <id>` to be exact).
 
 **`401 unauthorized`** — the `CLAUDE_BROKER_TOKEN` the client (or shim) sends
 doesn't match the daemon's. It must be identical in the daemon's env/config,

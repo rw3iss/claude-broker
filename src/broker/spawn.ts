@@ -16,7 +16,7 @@ export interface SpawnHelperOptions {
   logger: Logger;
   /** Path to the `claude` binary; defaults to "claude" on PATH. */
   claudeBinary?: string;
-  /** Channel passed to Claude's `--channels` flag; default `server:claude-broker`. */
+  /** Channel passed to `--dangerously-load-development-channels`; default `server:claude-broker`. */
   channelArg?: string;
   /** How long to wait for the shim to attach. */
   timeoutMs?: number;
@@ -25,12 +25,14 @@ export interface SpawnHelperOptions {
 }
 
 /**
- * Best-effort helper that shells out to `claude --channels <arg>` and waits for a
- * shim with the given label to attach. The registered `claude-broker` shim MCP
- * server (see `claude mcp add`) provides the job tools; `--channels` is what makes
- * Claude process the pushed channel events. v1 uses plain child_process.spawn with
- * no pty, so an interactive Claude TUI may not initialise reliably headless —
- * prefer starting `claude --channels server:claude-broker` yourself (in tmux). See the README.
+ * Best-effort helper that shells out to `claude --dangerously-load-development-channels <arg>` and
+ * waits for a shim with the given label to attach. The registered `claude-broker` shim MCP server
+ * (see `claude mcp add`) provides the job tools; the dev-channels flag is what authorizes the
+ * `server:` channel so Claude injects the pushed events. NOTE: this launch shows a one-time
+ * "Loading development channels" confirmation that must be ACCEPTED to set the channel's `dev`
+ * flag — which a headless (no-pty) spawn can't do. So this helper is best-effort only; prefer
+ * launching `claude --dangerously-skip-permissions --dangerously-load-development-channels
+ * server:claude-broker` yourself (in tmux) and accepting the prompt. See the README.
  */
 export function makeSpawnHelper(opts: SpawnHelperOptions) {
   const claudeBinary = opts.claudeBinary ?? 'claude';
@@ -47,7 +49,7 @@ export function makeSpawnHelper(opts: SpawnHelperOptions) {
       CLAUDE_BROKER_SESSION_LABEL: input.label,
     };
 
-    const child = spawn(claudeBinary, ['--channels', channelArg], {
+    const child = spawn(claudeBinary, ['--dangerously-load-development-channels', channelArg], {
       cwd: input.cwd,
       env,
       detached: true,
