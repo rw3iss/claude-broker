@@ -1,10 +1,11 @@
 import { Command } from 'commander';
 
 /**
- * Emits a shell function that launches a Claude Code session on the
- * claude-broker channel while capturing the full terminal transcript to a
- * per-session log file — staying fully interactive (it runs Claude inside a
- * pty via `script`, so the TUI is unaffected and you still see it live).
+ * Emits a shell function that launches a Claude Code session while capturing the
+ * full terminal transcript to a per-session log file — staying fully interactive
+ * (it runs Claude inside a pty via `script`, so the TUI is unaffected and you
+ * still see it live). The session attaches to the broker via the registered
+ * `claude-broker` shim MCP server (see `claude mcp add`), not a launch flag.
  *
  * Install:  eval "$(claude-broker shell-init)"   # in ~/.zshrc or ~/.bashrc
  * Use:      cll [label]                           # label defaults to "default"
@@ -30,7 +31,7 @@ ${fn}() {
   local ts file cmd
   ts="$(date +%Y%m%d-%H%M%S)"
   file="$dir/transcript-$ts.log"
-  cmd="claude --dangerously-skip-permissions --dangerously-load-development-channels server:claude-broker"
+  cmd="claude --dangerously-skip-permissions"
   # Pin session id/label to the log name so the daemon's job log lands in the
   # same <dir>. Inline env (no export) keeps these out of the calling shell.
   if command -v script >/dev/null 2>&1; then

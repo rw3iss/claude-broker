@@ -18,34 +18,77 @@ For a protocol-level walkthrough (HTTP → unix socket → MCP → Claude, end-t
 
 ## Requirements
 
-- Claude Code v2.1.80+
+- Claude Code v2.1.80+ — the broker attaches through a **standard MCP server**; no preview flags.
 - Node.js 20+
-- The `--dangerously-load-development-channels` flag (research-preview feature).
+- `openssl` (to mint a token), and `claude` logged in to your account.
 
 ## Quick start
 
+Local machine, from zero to a working session in about a minute:
+
 ```bash
-# 1. Install
+# 1. Install (clones, builds, symlinks `claude-broker` into ~/.local/bin)
 curl -fsSL https://raw.githubusercontent.com/rw3iss/claude-broker/main/install.sh | bash
 
-# 2. Start the daemon
+# 2. Start the daemon with a token. Keep this token — the shim AND every client must send it.
 export CLAUDE_BROKER_TOKEN=$(openssl rand -hex 16)
 claude-broker daemon start --detach
 
-# 3. Register the shim as an MCP server for Claude Code
+# 3. Register the shim as an MCP server for Claude Code (user scope → ~/.claude.json)
 claude mcp add claude-broker -s user \
   -e CLAUDE_BROKER_SESSION_LABEL=default \
   -- claude-broker shim
 
-# 4. Start a Claude session with the channel enabled
-claude --dangerously-load-development-channels server:claude-broker
+# 4. Start a NORMAL Claude session — the shim attaches it to the broker on startup.
+claude
+#   inside Claude, `/mcp` should now list "claude-broker"
 
-# 5. Submit a job from anywhere
+# 5. Verify the session attached
+curl -s http://127.0.0.1:4180/healthz        # → {"ok":true, ... ,"sessionCount":1}
+
+# 6. Submit a job from anywhere
 curl -sS -X POST http://127.0.0.1:4180/jobs \
   -H "Authorization: Bearer $CLAUDE_BROKER_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"session_label":"default","content":"What time is it?"}'
 ```
+
+> **No `--dangerously-load-development-channels` flag is needed** — that path is
+> deprecated and no longer attaches in current Claude Code. The shim is a plain
+> MCP server: register it (step 3) and start a normal `claude` (step 4). That's it.
+
+## Initialize on a server (persistent)
+
+Same flow as above, plus: the session must survive SSH disconnects, and the token
+must be shared with any service that submits jobs.
+
+1. **Install + log in.** Install `claude-broker` (above) and Claude Code
+   (`npm i -g @anthropic-ai/claude-code`), then run `claude` once to log in.
+2. **Run the daemon as a service** (systemd — see [Daemon](#daemon)) with the token
+   in its env file. Confirm: `curl -s http://127.0.0.1:4180/healthz` → `{"ok":true,...}`.
+3. **Register the shim** for the account that will host the session:
+   `claude mcp add claude-broker -s user -e CLAUDE_BROKER_SESSION_LABEL=<label> -- claude-broker shim`.
+4. **Start the session in tmux** so it outlives your shell:
+   ```bash
+   tmux new -s broker
+   claude          # `/mcp` lists claude-broker; leave it running, detach with Ctrl-b d
+   ```
+5. **Point your app at the broker.** Any service that submits jobs (an API gateway,
+   a worker) needs `CLAUDE_BROKER_URL=http://127.0.0.1:4180` and the **same**
+   `CLAUDE_BROKER_TOKEN` the daemon uses. Set both, then restart the service.
+6. **Verify end-to-end:** `curl -s :4180/healthz` shows `sessionCount ≥ 1`, and a
+   `POST /jobs` returns a result instead of `session not found`.
+
+**Gotchas (learned the hard way):**
+
+- **The token must match in three places** — the daemon's env/config, each client's
+  `CLAUDE_BROKER_TOKEN`, and the shim's env. Any mismatch is a `401 unauthorized`.
+- **MCP scope matters.** `claude mcp add -s user` writes `~/.claude.json`. A block
+  placed in `~/.claude/.claude.json` (note the extra subdir) is **not read** — `/mcp`
+  won't show it and no session attaches.
+- **The session is a live `claude` process.** It must stay running (tmux/screen) and
+  be at the main prompt to accept jobs. A shell running the CLI (`sessions list`,
+  `jobs submit`) also needs `CLAUDE_BROKER_TOKEN` exported.
 
 ## Install
 
@@ -69,8 +112,8 @@ from GitHub instead. Equivalent long form:
 curl -fsSL https://raw.githubusercontent.com/rw3iss/claude-broker/main/install.sh | bash -s -- --update
 ```
 
-Installer flags: `--shell-init` (wire the `cll` launcher into your shell rc),
-`--prefix`, `--bin-dir`, `--ref`, `--repo`. Same names work on
+Installer flags: `--shell-init` (wire the `cll` transcript launcher into your
+shell rc), `--prefix`, `--bin-dir`, `--ref`, `--repo`. Same names work on
 `claude-broker update`. Run with `--help` for all options.
 For a manual install from a working tree see [Development](#development).
 
@@ -194,12 +237,16 @@ controls.
 
 ## Starting a Claude session
 
-Once the MCP server is registered, start Claude with the dev-channels flag and
-enable the `claude-broker` channel:
+Once the shim MCP server is registered, just start Claude normally — the shim
+attaches the session to the broker on startup:
 
 ```bash
-claude --dangerously-load-development-channels server:claude-broker
+claude
 ```
+
+Inside Claude, `/mcp` lists **claude-broker** when it's attached. From another
+shell, `claude-broker sessions list` (or `GET /healthz` → `sessionCount`) confirms
+it. On a server, run this inside `tmux`/`screen` so the session persists.
 
 ### Pinning a session id
 
@@ -327,9 +374,8 @@ directory (`<log-dir>/<session>/`):
   every job's input (`content` + `meta`) and output (`result`/`error`/progress),
   so this is a clean, structured JSONL record. It does **not** include Claude's
   terminal chat — the channel only carries the job, not the conversation.
-- **Terminal transcript** (`transcript-<ts>.log`) — written by the **`cll`
-  launcher**, which runs Claude inside a pty (via `script`) so the TUI stays
-  interactive while the full session output is captured.
+- **Terminal transcript** (`transcript-<ts>.log`) — the full Claude TUI output,
+  captured by running the session inside a pty via `script` (see below).
 
 Log dir precedence: `CLAUDE_BROKER_LOG_DIR` → `logging.sessions.dir` →
 `~/.local/state/claude-broker/logs`.
@@ -343,46 +389,39 @@ claude-broker daemon start --log-sessions
 CLAUDE_BROKER_LOG_SESSIONS=1 claude-broker daemon start --detach
 ```
 
-### Launch + log a full session (the `cll` shortcut)
+The job I/O log is mechanism-independent — turn it on and every session's jobs
+are recorded, viewable with `claude-broker logs <session>`.
 
-Add the launcher to your shell **rc** once — `~/.bashrc` (bash) or `~/.zshrc`
-(zsh), **not** `~/.bash_profile`. New terminals are non-login shells that read
-`.bashrc`/`.zshrc`; `.bash_profile` is only read by login shells, so a function
-defined there won't exist in new tabs:
+### Capturing a full terminal transcript
 
-```bash
-echo 'eval "$(claude-broker shell-init)"' >> ~/.bashrc   # or ~/.zshrc
-exec $SHELL                                              # reload (or open a new terminal)
-```
-
-Or let the installer wire it up for you:
+The daemon job log doesn't include Claude's chat. To capture the whole TUI, run
+the session inside `script` (a pty wrapper). The **`cll`** shortcut does exactly
+that — the session still attaches via the registered shim MCP server; `cll` only
+adds the pty + transcript (it needs the shim registered, like any session):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/rw3iss/claude-broker/main/install.sh | bash -s -- --shell-init
+echo 'eval "$(claude-broker shell-init)"' >> ~/.bashrc   # or ~/.zshrc; reopen the shell
+cll trader                                               # → prints the transcript path, runs Claude live
 ```
 
-Then start a logged, fully-interactive session in one command:
+Or by hand, without touching your profile (equivalent to `scripts/cll.sh`):
 
 ```bash
-cll trader      # label defaults to "default"
-# → prints the transcript path and the watch commands, then runs Claude live.
+label=trader
+dir="$HOME/.local/state/claude-broker/logs/$label"; mkdir -p "$dir"
+script -q -e -f -c "claude --dangerously-skip-permissions" "$dir/transcript-$(date +%Y%m%d-%H%M%S).log"
 ```
 
-`cll` pins the session id/label to the log name, so the daemon's `jobs.log`
-and the transcript land in the same `<log-dir>/trader/` folder. (A standalone
-`scripts/cll.sh` is also provided if you'd rather not touch your profile.)
-
-Transcript capture needs the `script` tool (it runs Claude in a pty so the TUI
-stays interactive). It's preinstalled on most desktops but missing on minimal
-servers — recent Fedora split it into its own package:
+`script` is preinstalled on most desktops but missing on minimal servers —
+recent Fedora split it into its own package:
 
 ```bash
 sudo dnf install -y util-linux-script     # Fedora
 sudo apt  install -y bsdutils             # Debian/Ubuntu
 ```
 
-If `script` is absent, `cll` still launches Claude (and the daemon job log
-keeps working) — it just skips the transcript and prints the install hint.
+If `script` is absent, `cll` still launches Claude (the daemon job log keeps
+working) — it just skips the transcript.
 
 ### View, follow, and clear logs
 
@@ -502,7 +541,7 @@ All variables read anywhere in the codebase, grouped by where they apply:
 | `GET` | `/sessions` | List sessions (`?status=`, `?label=`) |
 | `GET` | `/sessions/:id` | Inspect a session |
 | `DELETE` | `/sessions/:id` | Detach a session (does not kill Claude) |
-| `POST` | `/sessions/spawn` | (optional) Spawn a new Claude session via the broker helper |
+| `POST` | `/sessions/spawn` | Best-effort: spawns `claude` headless and waits for the shim to attach. A TUI may not initialise reliably headless — prefer starting `claude` yourself (tmux). |
 
 Schemas and full payload shapes: [docs/architecture.md](./docs/architecture.md).
 
@@ -512,10 +551,10 @@ Schemas and full payload shapes: [docs/architecture.md](./docs/architecture.md).
 claude-broker daemon {start,stop,status}    # start: --log-sessions, --log-dir
 claude-broker shim                          # invoked by Claude Code's MCP config
 claude-broker jobs {list,get,submit,cancel}
-claude-broker sessions {list,get,spawn,kill}
+claude-broker sessions {list,get,spawn,kill}  # spawn = best-effort headless; prefer a manual `claude`
 claude-broker logs [session] [-n N|-f|--transcript|--all]
 claude-broker logs {list, clear [session] [--all] [--days-before N]}
-claude-broker shell-init [--name cll]       # print the cll launcher function
+claude-broker shell-init [--name cll]       # print the cll transcript launcher
 claude-broker config {validate,show}
 claude-broker update [--ref REF] [--remote] # git-pull + rebuild this install
 ```
@@ -555,19 +594,26 @@ Needs `node-gyp`, `python3`, `make`, a C++ compiler. Fedora:
 `sudo dnf install -y python3 make gcc-c++`. Debian/Ubuntu:
 `sudo apt install -y python3 make g++`.
 
-**`session not found` on submit** — no shim is attached for that label.
-Start `claude --dangerously-load-development-channels server:claude-broker`
-in a second terminal and re-submit.
+**`session not found` on submit** — no session is attached for that label.
+Confirm the shim MCP server is registered (`claude mcp add …`, and `/mcp` lists
+**claude-broker** inside Claude), then start a normal `claude` session and
+re-submit. On a server, keep it running in `tmux`.
+
+**`401 unauthorized`** — the `CLAUDE_BROKER_TOKEN` the client (or shim) sends
+doesn't match the daemon's. It must be identical in the daemon's env/config,
+the shim's MCP `env`, and every client. Re-check all three and restart.
+
+**`/mcp` doesn't list `claude-broker`** — the shim isn't registered where this
+Claude reads config. Use `claude mcp add … -s user` (writes `~/.claude.json`);
+a block in `~/.claude/.claude.json` (extra subdir) is ignored. Restart Claude.
 
 **Job stays in `dispatched`, second job blocks in `pending`** — Claude
-received the channel event but didn't call `complete_job`. Either the MCP
+received the job event but didn't call `complete_job`. Either the MCP
 server's instructions weren't injected (restart Claude after `claude mcp add`),
 or submit with `--mode fire-and-forget` so subsequent jobs don't serialize.
 
 ## Limitations (v1)
 
-- Custom channels are a research-preview feature; sessions must be started
-  with `--dangerously-load-development-channels`.
 - One broker per machine.
 - Serial-mode dispatch by default (one in-flight job per session).
 - Static bearer-token auth only.
