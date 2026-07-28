@@ -6,6 +6,7 @@ import { StaticBearerAuthenticator } from './auth.js';
 import { Sweeper } from './sweeper.js';
 import { makeSpawnHelper } from './spawn.js';
 import { SessionLogger } from './session-logger.js';
+import { AutoClearManager } from './auto-clear.js';
 import { resolveLogDir } from '../lib/log-paths.js';
 
 export interface BrokerHandle {
@@ -14,6 +15,7 @@ export interface BrokerHandle {
   socket: SocketServer;
   sweeper: Sweeper;
   sessionLogger: SessionLogger | null;
+  autoClear: AutoClearManager | null;
   shutdown(reason?: string): Promise<void>;
   httpAddress: string;
 }
@@ -92,6 +94,30 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
   });
   sweeper.start();
 
+  // Auto-clear: reset an idle session's context after it finishes jobs (the
+  // automated `/clear`). Off unless enabled in config. See auto-clear.ts for why
+  // this drives the TUI externally rather than via the job channel.
+  const ac = config.broker.auto_clear;
+  let autoClear: AutoClearManager | null = null;
+  if (ac.enabled) {
+    autoClear = new AutoClearManager({
+      bus: container.bus,
+      store: container.store,
+      sessions: container.sessions,
+      clock: container.clock,
+      logger: container.logger.child({ comp: 'auto-clear' }),
+      enabled: true,
+      idleMs: ac.idle_sec * 1000,
+      minJobs: ac.min_jobs,
+      cooldownMs: ac.cooldown_sec * 1000,
+      checkIntervalMs: ac.check_interval_sec * 1000,
+      keys: ac.keys,
+      tmuxTarget: ac.tmux_target,
+      command: ac.command,
+    });
+    autoClear.start();
+  }
+
   // Bind HTTP *before* the unix socket. If a second daemon starts while one is
   // already running, the HTTP port conflict (EADDRINUSE) fails it fast — before
   // it can touch the shared socket file. (SocketServer.listen also refuses to
@@ -122,11 +148,13 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
     socket,
     sweeper,
     sessionLogger,
+    autoClear,
     httpAddress,
     async shutdown(reason = 'shutdown') {
       logger.info({ reason }, 'broker shutting down');
       sweeper.stop();
       sessionLogger?.stop();
+      autoClear?.stop();
       await http.close();
       await socket.close();
       await container.dispose();

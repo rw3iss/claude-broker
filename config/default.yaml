@@ -12,6 +12,27 @@ broker:
     long_poll_max_sec: 600
     client_ref_window_sec: 86400
     orphan_grace_sec: 120
+  # Auto-clear: reset an idle session's context window after it finishes jobs —
+  # the automated equivalent of typing `/clear` in the TUI when the queue drains,
+  # so a long-lived worker session doesn't run out of context tokens. The broker
+  # can't clear via the job channel (that only carries message content), so it
+  # types the keys into the session's terminal externally: tmux `send-keys` (the
+  # pane is auto-detected from the session pid, or set `tmux_target`), or a custom
+  # `command`. Off by default — keystroke injection is environment-specific and
+  # must not fire blind. Turn on with CLAUDE_BROKER_AUTO_CLEAR=1 (the session must
+  # run under tmux for auto-detection, e.g. the README's tmux/`cll` launch).
+  auto_clear:
+    enabled: ${CLAUDE_BROKER_AUTO_CLEAR:-false}
+    idle_sec: ${CLAUDE_BROKER_AUTO_CLEAR_IDLE_SEC:-180}
+    min_jobs: ${CLAUDE_BROKER_AUTO_CLEAR_MIN_JOBS:-1}
+    cooldown_sec: ${CLAUDE_BROKER_AUTO_CLEAR_COOLDOWN_SEC:-300}
+    check_interval_sec: 30
+    keys: /clear
+    # Pin the pane if auto-detection can't find it (e.g. `broker:0.0` or a session name):
+    tmux_target: ${CLAUDE_BROKER_AUTO_CLEAR_TMUX_TARGET:-}
+    # Or fully override the injection with your own command (gets CLAUDE_BROKER_CLEAR_KEYS,
+    # CLAUDE_BROKER_SESSION_ID/LABEL/PID, CLAUDE_BROKER_TMUX_TARGET in its env):
+    command: ${CLAUDE_BROKER_AUTO_CLEAR_COMMAND:-}
 
 storage:
   job_store:

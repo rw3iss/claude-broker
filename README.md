@@ -475,6 +475,63 @@ are preserved for history. Set `CLAUDE_BROKER_LOG_RETAIN_DAYS` to have the
 daemon's sweeper auto-delete log files older than N days, or prune on demand
 with `logs clear --days-before N`.
 
+## Auto-clearing session context
+
+A long-lived worker session accumulates context as it processes jobs and
+eventually runs out of tokens. The manual fix is to type `/clear` in the TUI
+when the queue drains. Auto-clear does that for you.
+
+**How it works (and why it's external).** The broker delivers jobs to Claude as
+`notifications/claude/channel` events, which land as message *content* — a
+`/clear` pushed down that channel would be read as literal text, not run as a
+slash command. So the broker instead types the keys into the terminal the
+session reads from, using tmux `send-keys` (or a custom command). This is an
+*in-session* reset — the `claude` process keeps running and stays attached, so
+**no in-flight job is dropped** (contrast a process restart, which would).
+
+**When it fires.** On a timer, for each attached session, it clears when *all* of:
+
+- at least `min_jobs` jobs have **finished** (completed/failed) since the last clear;
+- the session has had **no job activity for `idle_sec`** seconds;
+- the `cooldown_sec` debounce since the last clear has elapsed; and
+- **no job is pending/dispatched/in_progress** — an authoritative store check, so it
+  never clears mid-job.
+
+Each clear is logged (`auto-cleared idle session context`).
+
+**It's off by default** — keystroke injection is environment-specific and must
+not fire blind. Turn it on (the session must run under **tmux** so the pane can be
+auto-detected — the README's tmux / `cll` launch works):
+
+```ini
+# /etc/claude-broker.env  (or the daemon's env)
+CLAUDE_BROKER_AUTO_CLEAR=1
+# Optional tuning:
+# CLAUDE_BROKER_AUTO_CLEAR_IDLE_SEC=180
+# CLAUDE_BROKER_AUTO_CLEAR_MIN_JOBS=1
+# CLAUDE_BROKER_AUTO_CLEAR_COOLDOWN_SEC=300
+# Pin the pane if auto-detection can't find it:
+# CLAUDE_BROKER_AUTO_CLEAR_TMUX_TARGET=broker:0.0
+```
+
+Find the pane target with `tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index}'`.
+Auto-detection walks the session pid's process tree (shim → `claude` → the pane's
+shell) to match a pane; if it can't (tmux not reachable, session not in tmux), set
+`tmux_target` or a `command`.
+
+**Custom injection.** Set `broker.auto_clear.command` (or
+`CLAUDE_BROKER_AUTO_CLEAR_COMMAND`) to bypass tmux entirely — e.g. `screen -X` or a
+script that writes to a pty. The command runs with `CLAUDE_BROKER_CLEAR_KEYS`,
+`CLAUDE_BROKER_SESSION_ID`, `CLAUDE_BROKER_SESSION_LABEL`,
+`CLAUDE_BROKER_SESSION_PID`, and `CLAUDE_BROKER_TMUX_TARGET` in its environment; a
+non-zero exit is treated as a failed injection (retried next tick).
+
+> **Restart vs. in-session clear.** Auto-clear is an in-session `/clear`, not a
+> process restart — it needs a terminal to type into (tmux/pty). It does not kill
+> or relaunch `claude`. If you instead want a hard reset, restart the session
+> process yourself (e.g. in tmux); that drops any in-flight job and detaches until
+> the session re-attaches.
+
 ## Configuration
 
 The broker reads YAML from `~/.config/claude-broker/config.yaml` (override with
@@ -508,6 +565,14 @@ Full schema and defaults live in [`config/default.yaml`](./config/default.yaml).
 | `broker.defaults.long_poll_max_sec` | `600` | Cap on `/jobs/:id/wait?timeout=` |
 | `broker.defaults.client_ref_window_sec` | `86400` | Idempotency lookup window |
 | `broker.defaults.orphan_grace_sec` | `120` | Grace before dispatched jobs on detached sessions are marked `orphaned` |
+| `broker.auto_clear.enabled` | `false` | Auto-reset an idle session's context (the automated `/clear`). See [Auto-clearing session context](#auto-clearing-session-context). |
+| `broker.auto_clear.idle_sec` | `180` | Clear only after this many seconds of no job activity |
+| `broker.auto_clear.min_jobs` | `1` | Require at least this many finished jobs since the last clear |
+| `broker.auto_clear.cooldown_sec` | `300` | Never clear the same session more often than this |
+| `broker.auto_clear.check_interval_sec` | `30` | How often the manager evaluates sessions |
+| `broker.auto_clear.keys` | `/clear` | Keystrokes typed into the TUI to reset context |
+| `broker.auto_clear.tmux_target` | (auto) | Explicit tmux pane (`session:window.pane` or session name); auto-detected from the session pid if unset |
+| `broker.auto_clear.command` | — | Custom injection command; overrides the tmux path entirely |
 | `storage.job_store.driver` | `sqlite` | `sqlite` or (stub) `postgres` |
 | `storage.job_store.sqlite.path` | `$HOME/.local/state/claude-broker/jobs.sqlite` | SQLite file location |
 | `dispatch.driver` | `inproc` | `inproc` or (stub) `bullmq` |
@@ -536,6 +601,12 @@ All variables read anywhere in the codebase, grouped by where they apply:
 | `CLAUDE_BROKER_LOG_DIR` | daemon + `logs` cmd | Log root. Takes precedence over `logging.sessions.dir`. Default `~/.local/state/claude-broker/logs`. |
 | `CLAUDE_BROKER_LOG_MAX_BYTES` | daemon | Roll size for each session's active `jobs.log`. Default `5242880` (5 MB). |
 | `CLAUDE_BROKER_LOG_RETAIN_DAYS` | daemon | If set, the sweeper deletes log files older than this many days. |
+| `CLAUDE_BROKER_AUTO_CLEAR` | daemon | `1`/`true` enables auto-clearing an idle session's context. Default off. See [Auto-clearing session context](#auto-clearing-session-context). |
+| `CLAUDE_BROKER_AUTO_CLEAR_IDLE_SEC` | daemon | Seconds of no job activity before clearing. Default `180`. |
+| `CLAUDE_BROKER_AUTO_CLEAR_MIN_JOBS` | daemon | Finished jobs required since the last clear. Default `1`. |
+| `CLAUDE_BROKER_AUTO_CLEAR_COOLDOWN_SEC` | daemon | Minimum seconds between clears of one session. Default `300`. |
+| `CLAUDE_BROKER_AUTO_CLEAR_TMUX_TARGET` | daemon | Explicit tmux pane to send-keys into. Default: auto-detect from the session pid. |
+| `CLAUDE_BROKER_AUTO_CLEAR_COMMAND` | daemon | Custom injection command; overrides the tmux path. |
 | `BROKER` | `examples/*` clients | Base URL for the broker. Default `http://127.0.0.1:4180`. |
 | `SESSION_LABEL` | `examples/webhook.ts` | Label every forwarded webhook job targets. |
 | `PORT` | `examples/webhook.ts` | Port the webhook forwarder listens on. Default `4191`. |

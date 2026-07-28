@@ -27,6 +27,12 @@ const zOptionalPositiveInt = z.preprocess(
   z.coerce.number().int().positive().optional(),
 );
 
+/** Optional non-empty string that treats "" / null (from `${VAR:-}`) as unset. */
+const zOptionalString = z.preprocess(
+  (v) => (v === '' || v === null ? undefined : v),
+  z.string().min(1).optional(),
+);
+
 export function defaultLogDir(): string {
   return path.join(os.homedir(), '.local', 'state', 'claude-broker', 'logs');
 }
@@ -50,10 +56,36 @@ export const BrokerDefaultsSchema = z.object({
   orphan_grace_sec: z.number().int().positive().default(120),
 });
 
+/**
+ * Auto-clear: reset an idle session's context window (the automated `/clear`).
+ * The broker types the keys into the session's TUI externally (tmux send-keys or
+ * a custom command) — it can't clear via the job channel, which only carries
+ * message content. Off by default: keystroke injection is environment-specific
+ * (needs a tmux pane or a custom command) and must not fire blind.
+ */
+export const AutoClearConfigSchema = z.object({
+  enabled: zBool.default(false),
+  /** Clear only after this many seconds of no job activity. */
+  idle_sec: z.coerce.number().int().positive().default(180),
+  /** Require at least this many finished jobs since the last clear. */
+  min_jobs: z.coerce.number().int().nonnegative().default(1),
+  /** Never clear the same session more often than this. */
+  cooldown_sec: z.coerce.number().int().positive().default(300),
+  /** How often (seconds) the manager evaluates sessions. */
+  check_interval_sec: z.coerce.number().int().positive().default(30),
+  /** Keystrokes typed into the TUI to reset context. */
+  keys: z.string().min(1).default('/clear'),
+  /** Explicit tmux target (session:window.pane, or session name). Auto-detected if unset. */
+  tmux_target: zOptionalString,
+  /** Custom shell command template; overrides the tmux path entirely. */
+  command: zOptionalString,
+});
+
 export const BrokerConfigSchema = z.object({
   http: HttpConfigSchema,
   socket: SocketConfigSchema.default({}),
   defaults: BrokerDefaultsSchema.default({}),
+  auto_clear: AutoClearConfigSchema.default({}),
 });
 
 export const SqliteStoreConfigSchema = z.object({
@@ -117,6 +149,7 @@ export const ConfigSchema = z.object({
 
 export type Config = z.infer<typeof ConfigSchema>;
 export type BrokerConfig = z.infer<typeof BrokerConfigSchema>;
+export type AutoClearConfig = z.infer<typeof AutoClearConfigSchema>;
 export type JobStoreConfig = z.infer<typeof JobStoreConfigSchema>;
 export type DispatchConfig = z.infer<typeof DispatchConfigSchema>;
 export type LoggingConfig = z.infer<typeof LoggingConfigSchema>;
