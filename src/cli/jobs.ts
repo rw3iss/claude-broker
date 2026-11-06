@@ -12,6 +12,7 @@ interface SubmitOpts {
   config?: string;
   session?: string;
   sessionLabel?: string;
+  pool?: string;
   content?: string;
   contentFile?: string;
   ttl?: string;
@@ -60,6 +61,7 @@ export function jobsCommand(): Command {
       .description('Submit a job')
       .option('--session <id>', 'session id')
       .option('--session-label <label>', 'session label')
+      .option('--pool <pool>', 'pool: least-busy healthy session labelled <pool> or <pool>-<n>')
       .option('--content <text>', 'job content')
       .option('--content-file <path>', 'read content from file (alternative to --content)')
       .option('--ttl <sec>', 'TTL in seconds')
@@ -91,6 +93,7 @@ export function jobsCommand(): Command {
     const body = {
       session_id: opts.session,
       session_label: opts.sessionLabel,
+      pool: opts.pool,
       content,
       meta: Object.keys(meta).length ? meta : undefined,
       ttl_sec: opts.ttl ? Number(opts.ttl) : undefined,

@@ -1,0 +1,6 @@
+ WARNING: Claude Code running in Bypass Permissions mode
+
+ ❯ 1. No, exit
+   2. Yes, I accept
+
+ Enter to confirm · Esc to exit

@@ -1,0 +1,16 @@
+Welcome to Claude Code v2.1.309
+
+This will guide you through long-lived (1-year) auth token setup for your
+Claude account. Claude subscription required.
+
+Browser didn't open? Use the url below to sign in (c to copy)
+
+https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88
+ed-5944d1962f5e&response_type=code&redirect_uri=https%3A%2F%2Fplatform.claude.co
+m%2Foauth%2Fcode%2Fcallback&scope=user%3Ainference&code_challenge=2PmPWub4QVakYv
+GzJOLzgmCBLdhaknIrsRuSKVihJug&code_challenge_method=S256&state=F_iGYWWfOeGFOUy0v
+VOjdlm-pb8hKVklLFQ6nK8t4rk
+
+Hold Shift while selecting to use your terminal's native copy
+
+Paste code here if prompted >

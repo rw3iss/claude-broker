@@ -1,0 +1,9 @@
+← claude-broker: ▶ SUMMARY NY J 1192: Congratulating Superintendent Stephen …
+← claude-broker: ▶ SUMMARY NY J 1162: Commemorating the 30th Anniversary of …
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+   What do you want to do?
+   ❯ 1. Stop and wait for limit to reset
+     2. Wait here, then continue automatically at Nov 6, 7am
+     3. Add funds to continue with usage credits
+     4. Upgrade your plan
+   Enter to confirm · Esc to cancel

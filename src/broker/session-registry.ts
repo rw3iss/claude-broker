@@ -1,6 +1,8 @@
 import { EventEmitter } from 'node:events';
 import type { Clock } from '../ports/clock.js';
 import type { SessionEvent, SessionStatus } from '../ports/types.js';
+import type { TuiState } from '../fleet/tui-state.js';
+import { inPool } from '../fleet/routing.js';
 
 export interface SessionHandle {
   id: string;
@@ -12,6 +14,14 @@ export interface SessionHandle {
   lastHeartbeatAt: number;
   /** Opaque transport handle the SocketServer hangs on the session. */
   transport?: unknown;
+  /** What the session's terminal shows (TuiWatcher / FleetManager); unset = unknown. */
+  tuiState?: TuiState;
+  tuiDetail?: string | null;
+  tuiCheckedAt?: number | null;
+  /** Launched and supervised by the broker's fleet. */
+  managed?: boolean;
+  /** When routing last chose this session (ties go to the least recent). */
+  lastDispatchAt?: number | null;
 }
 
 export interface RegisterInput {
@@ -90,6 +100,25 @@ export class SessionRegistry {
 
   get(sessionId: string): SessionHandle | null {
     return this.sessions.get(sessionId) ?? null;
+  }
+
+  /** Record what the session's terminal shows. */
+  setTui(sessionId: string, state: TuiState, detail: string | null, at: number): void {
+    const s = this.sessions.get(sessionId);
+    if (!s) return;
+    s.tuiState = state;
+    s.tuiDetail = detail;
+    s.tuiCheckedAt = at;
+  }
+
+  /** Attached sessions a label (exact) or pool (`<pool>` / `<pool>-<n>`) addresses. */
+  candidates(by: { label?: string; pool?: string }): SessionHandle[] {
+    return [...this.sessions.values()].filter((s) => {
+      if (s.status !== 'attached') return false;
+      if (by.label !== undefined) return s.label === by.label;
+      if (by.pool !== undefined) return inPool(s.label, by.pool);
+      return false;
+    });
   }
 
   /** First attached session matching label. */

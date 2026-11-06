@@ -13,6 +13,8 @@ export const SubmitJobBodySchema = z
   .object({
     session_id: z.string().min(1).optional(),
     session_label: z.string().min(1).optional(),
+    /** Pool: attached sessions labelled `<pool>` or `<pool>-<n>` (least-busy healthy one). */
+    pool: z.string().min(1).optional(),
     spawn_if_missing: z.boolean().default(false),
     spawn_opts: z
       .object({
@@ -27,10 +29,13 @@ export const SubmitJobBodySchema = z
     client_ref: z.string().min(1).max(255).optional(),
     mode: z.enum(['serial', 'fire-and-forget']).default('serial'),
   })
-  .refine((b) => Boolean(b.session_id) !== Boolean(b.session_label), {
-    message: 'exactly one of session_id or session_label is required',
-    path: ['session_id'],
-  });
+  .refine(
+    (b) => [b.session_id, b.session_label, b.pool].filter(Boolean).length === 1,
+    {
+      message: 'exactly one of session_id, session_label or pool is required',
+      path: ['session_id'],
+    },
+  );
 
 export type SubmitJobBody = z.infer<typeof SubmitJobBodySchema>;
 
@@ -72,4 +77,13 @@ export const JobIdParamSchema = z.object({
 
 export const SessionIdParamSchema = z.object({
   id: z.string().min(1),
+});
+
+export const AuthCodeBodySchema = z.object({
+  code: z.string().min(1).max(2048),
+});
+export type AuthCodeBody = z.infer<typeof AuthCodeBodySchema>;
+
+export const FleetLabelParamSchema = z.object({
+  label: z.string().regex(/^[A-Za-z0-9_.-]{1,64}$/),
 });

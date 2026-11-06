@@ -1,0 +1,8 @@
+ WARNING: Loading development channels
+
+ --dangerously-load-development-channels is for local channel development only.
+
+ ❯ 1. I am using this for local development
+   2. Exit
+
+ Enter to confirm · Esc to cancel

@@ -21,12 +21,15 @@ import { jobId as makeJobId } from '../lib/ids.js';
 import { toIso } from '../lib/time.js';
 import type { SessionRegistry } from './session-registry.js';
 import type { SseBus } from './sse-bus.js';
+import { pickSession } from '../fleet/routing.js';
 
 const META_KEY_RE = /^[A-Za-z0-9_]+$/;
 
 export interface SubmitJobInput {
   session_id?: string;
   session_label?: string;
+  /** Pool: attached sessions labelled `<pool>` or `<pool>-<n>`. */
+  pool?: string;
   spawn_if_missing?: boolean;
   content: string;
   meta?: JobMeta;
@@ -78,13 +81,14 @@ export class JobService {
     if (!input.content || input.content.trim() === '') {
       throw new ValidationError('content is required');
     }
-    if (input.session_id && input.session_label) {
+    const targets = [input.session_id, input.session_label, input.pool].filter(Boolean).length;
+    if (targets > 1) {
       throw new ValidationError(
-        'session_id and session_label are mutually exclusive',
+        'session_id, session_label and pool are mutually exclusive',
       );
     }
-    if (!input.session_id && !input.session_label) {
-      throw new ValidationError('one of session_id or session_label is required');
+    if (targets === 0) {
+      throw new ValidationError('one of session_id, session_label or pool is required');
     }
 
     if (input.meta) {
@@ -98,10 +102,15 @@ export class JobService {
     }
 
     let sessionId = input.session_id;
-    if (!sessionId && input.session_label) {
-      const match = this.sessions.findByLabel(input.session_label);
+    if (!sessionId && (input.session_label || input.pool)) {
+      const match = await this.route(
+        input.pool ? { pool: input.pool } : { label: input.session_label as string },
+      );
       if (match) {
         sessionId = match.id;
+        match.lastDispatchAt = this.clock.now();
+      } else if (input.pool) {
+        throw new NotFoundError('healthy session in pool', input.pool);
       } else if (input.spawn_if_missing) {
         throw new ConflictError(
           'spawn_if_missing not implemented at JobService layer; ' +
@@ -143,6 +152,31 @@ export class JobService {
     this.publish('job.created', job);
     await this.dispatcher.notifyPending(sessionId, id);
     return job;
+  }
+
+  /**
+   * Least-busy HEALTHY attached session for a label or pool (ties → least
+   * recently routed). See src/fleet/routing.ts.
+   */
+  async route(by: { label?: string; pool?: string }) {
+    const candidates = this.sessions.candidates(by);
+    if (candidates.length === 0) return null;
+    const busy = await this.busyCounts(candidates.map((c) => c.id));
+    return pickSession(candidates, busy);
+  }
+
+  /** Active (pending / dispatched / in_progress) jobs per session id. */
+  async busyCounts(sessionIds: string[]): Promise<Map<string, number>> {
+    const out = new Map<string, number>();
+    for (const id of sessionIds) {
+      const r = await this.store.list({
+        session_id: id,
+        status: ['pending', 'dispatched', 'in_progress'],
+        limit: 1,
+      });
+      out.set(id, r.total);
+    }
+    return out;
   }
 
   async get(jobId: string): Promise<Job> {

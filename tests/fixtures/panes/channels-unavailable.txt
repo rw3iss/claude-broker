@@ -1,0 +1,10 @@
+ ▐▛███▛█   Claude Code v2.1.309
+▝▜██████▀  Opus 5.5 · Claude Ultra
+ ▝▝   ▝▝   /tmp/cbt/data/sessions
+▎ --dangerously-load-development-channels ignored (server:claude-broker)
+▎ Channels are not currently available
+─────────────────────────────────────────────────────────────────
+❯ 
+─────────────────────────────────────────────────────────────────
+  Opus 5.5 │ medium ⚡ │ ░░░░░ 0/1.0m 0% │ 5h ░░░░ 0%
+  ⏵⏵ bypass permissions on (shift+tab to cycle)
