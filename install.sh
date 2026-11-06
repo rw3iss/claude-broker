@@ -112,8 +112,12 @@ fi
 
 log "installing dependencies with $PKG_MGR"
 case "$PKG_MGR" in
+  # pnpm can refuse a whole install over its build-approval gate (pnpm 11:
+  # ERR_PNPM_IGNORED_BUILDS) — pnpm-workspace.yaml allows our two native
+  # builds; if pnpm still fails, fall back to npm rather than abort.
   pnpm) ( cd "$PREFIX" && pnpm install --prod=false --frozen-lockfile 2>/dev/null \
-            || pnpm install --prod=false ) ;;
+            || pnpm install --prod=false ) \
+          || { warn "pnpm install failed — retrying with npm"; PKG_MGR="npm"; ( cd "$PREFIX" && rm -rf node_modules && npm install --no-audit --no-fund ); } ;;
   npm)  ( cd "$PREFIX" && npm install --no-audit --no-fund ) ;;
 esac
 

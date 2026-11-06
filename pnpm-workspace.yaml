@@ -1,0 +1,10 @@
+# Settings-only workspace file (single package). pnpm 10 reads
+# `onlyBuiltDependencies` here; pnpm 11 ignores package.json "pnpm" settings and
+# fails the install (ERR_PNPM_IGNORED_BUILDS) unless the native builds are
+# allowed with `allowBuilds`. Both are kept so either pnpm installs cleanly.
+onlyBuiltDependencies:
+  - better-sqlite3
+  - esbuild
+allowBuilds:
+  better-sqlite3: true
+  esbuild: true
