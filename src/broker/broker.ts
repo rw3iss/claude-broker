@@ -8,6 +8,12 @@ import { makeSpawnHelper } from './spawn.js';
 import { SessionLogger } from './session-logger.js';
 import { AutoClearManager } from './auto-clear.js';
 import { resolveLogDir } from '../lib/log-paths.js';
+import { TuiWatcher } from './tui-watcher.js';
+import { FleetManager } from '../fleet/fleet-manager.js';
+import { AuthManager } from '../fleet/auth.js';
+import { Tmux, makeTmuxExec } from '../fleet/tmux.js';
+import { findBinary } from '../fleet/launch.js';
+import path from 'node:path';
 
 export interface BrokerHandle {
   container: Container;
@@ -16,6 +22,9 @@ export interface BrokerHandle {
   sweeper: Sweeper;
   sessionLogger: SessionLogger | null;
   autoClear: AutoClearManager | null;
+  fleet: FleetManager | null;
+  authManager: AuthManager | null;
+  tuiWatcher: TuiWatcher | null;
   shutdown(reason?: string): Promise<void>;
   httpAddress: string;
 }
@@ -48,7 +57,51 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
     logger: container.logger.child({ comp: 'spawn' }),
   });
 
+  // Fleet (managed sessions) + Claude sign-in — 0.6. Everything runs on the
+  // broker's PRIVATE tmux server (tmux -L), never the operator's.
+  const fc = config.fleet;
+  let fleet: FleetManager | null = null;
+  let authManager: AuthManager | null = null;
+  const claudeBin = (): string | null => findBinary('claude', fc.claude_bin);
+  if (fc.enabled) {
+    const tmux = new Tmux(fc.tmux_socket, makeTmuxExec(fc.tmux_socket));
+    const paths = {
+      stateDir: fc.state_dir,
+      oauthEnv: fc.oauth_env,
+      workdir: path.join(fc.state_dir, 'workdir'),
+    };
+    authManager = new AuthManager({
+      tmux,
+      session: fc.tmux_session,
+      oauthEnv: fc.oauth_env,
+      workdir: paths.workdir,
+      claudeBin,
+      clock: container.clock,
+      logger: container.logger.child({ comp: 'auth' }),
+      onTokenSaved: () => fleet?.onTokenSaved(),
+    });
+    const am = authManager;
+    fleet = new FleetManager({
+      tmux,
+      sessions: container.sessions,
+      clock: container.clock,
+      logger: container.logger.child({ comp: 'fleet' }),
+      session: fc.tmux_session,
+      specPath: fc.spec_path,
+      paths,
+      socketPath: config.broker.socket.path,
+      brokerToken: config.broker.http.auth_token,
+      claudeBin,
+      shimOverride: fc.shim_command,
+      checkIntervalMs: fc.check_interval_sec * 1000,
+      tokenSavedAt: () => am.tokenSavedAt(),
+    });
+  }
+
   const http = buildHttpServer({
+    fleet,
+    authManager,
+    claudeBin,
     service: container.service,
     sessions: container.sessions,
     bus: container.bus,
@@ -118,6 +171,29 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
     autoClear.start();
   }
 
+  // TUI watcher + nudge (0.6): what each attached session's terminal shows.
+  let tuiWatcher: TuiWatcher | null = null;
+  if (config.broker.tui.enabled) {
+    const nc = config.broker.nudge;
+    tuiWatcher = new TuiWatcher({
+      sessions: container.sessions,
+      store: container.store,
+      clock: container.clock,
+      logger: container.logger.child({ comp: 'tui' }),
+      fleet,
+      intervalMs: config.broker.tui.check_interval_sec * 1000,
+      watchUnmanaged: config.broker.tui.watch_unmanaged,
+      nudge: {
+        enabled: nc.enabled,
+        managed: nc.managed,
+        afterSec: nc.after_sec,
+        cooldownSec: nc.cooldown_sec,
+        text: nc.text,
+      },
+    });
+    tuiWatcher.start();
+  }
+
   // Bind HTTP *before* the unix socket. If a second daemon starts while one is
   // already running, the HTTP port conflict (EADDRINUSE) fails it fast — before
   // it can touch the shared socket file. (SocketServer.listen also refuses to
@@ -133,6 +209,8 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
   if (opts.startSocket !== false) {
     await socket.listen();
   }
+  // The fleet starts after the socket is listening, so its sessions' shims can attach.
+  fleet?.start();
 
   logger.info(
     {
@@ -149,12 +227,18 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
     sweeper,
     sessionLogger,
     autoClear,
+    fleet,
+    authManager,
+    tuiWatcher,
     httpAddress,
     async shutdown(reason = 'shutdown') {
       logger.info({ reason }, 'broker shutting down');
       sweeper.stop();
       sessionLogger?.stop();
       autoClear?.stop();
+      tuiWatcher?.stop();
+      // Managed sessions keep running across a daemon restart (they re-attach).
+      fleet?.stopTimer();
       await http.close();
       await socket.close();
       await container.dispose();

@@ -6,7 +6,7 @@ export interface ClientOptions {
   config?: string;
 }
 
-export type HttpMethod = 'GET' | 'POST' | 'DELETE';
+export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
 
 export interface ResolvedClient {
   config: Config;

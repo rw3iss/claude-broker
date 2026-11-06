@@ -10,10 +10,17 @@ import type { JobService } from './job-service.js';
 import type { SessionRegistry } from './session-registry.js';
 import type { SseBus } from './sse-bus.js';
 import type { Authenticator } from './auth.js';
-import { DomainError, UnauthorizedError } from '../lib/errors.js';
+import { DomainError, NotFoundError, UnauthorizedError } from '../lib/errors.js';
 import { toIso, toIsoOrNull } from '../lib/time.js';
 import { packageVersion } from '../lib/version.js';
+import type { FleetManager } from '../fleet/fleet-manager.js';
+import type { AuthManager } from '../fleet/auth.js';
+import { poolOfLabel } from '../fleet/routing.js';
+import { isHealthyTuiState } from '../fleet/tui-state.js';
+import { claudeVersion } from '../fleet/launch.js';
 import {
+  AuthCodeBodySchema,
+  FleetLabelParamSchema,
   CommentBodySchema,
   ListJobsQuerySchema,
   ListSessionsQuerySchema,
@@ -44,7 +51,15 @@ export interface HttpServerOptions {
   notifyComment?: (sessionId: string, jobId: string, note: string) => void;
   /** Optional shim-side cancel relay; bridge to SocketServer.cancelJob. */
   notifyCancel?: (sessionId: string, jobId: string) => void;
+  /** Managed sessions (0.6). Absent → /fleet answers 404. */
+  fleet?: FleetManager | null;
+  /** Claude sign-in (0.6). Absent → /auth answers 404. */
+  authManager?: AuthManager | null;
+  /** `claude` binary resolver for /auth status. */
+  claudeBin?: () => string | null;
 }
+
+export const CAPABILITIES = ['pools', 'fleet', 'auth', 'tui'] as const;
 
 export interface BuiltHttpServer {
   fastify: FastifyInstance;
@@ -95,6 +110,7 @@ export function buildHttpServer(opts: HttpServerOptions): BuiltHttpServer {
     version: PACKAGE_VERSION,
     uptimeSec: Math.floor(process.uptime()),
     sessionCount: opts.sessions.list({ status: 'attached' }).length,
+    capabilities: [...CAPABILITIES],
   }));
 
   fastify.get('/metrics', async (_req, reply) => {
@@ -117,8 +133,10 @@ export function buildHttpServer(opts: HttpServerOptions): BuiltHttpServer {
   fastify.get('/sessions', async (req) => {
     await requireAuth(req);
     const q = ListSessionsQuerySchema.parse(req.query ?? {});
+    const list = opts.sessions.list(q);
+    const busy = await opts.service.busyCounts(list.map((s) => s.id));
     return {
-      items: opts.sessions.list(q).map(serializeSession),
+      items: list.map((s) => serializeSession(s, busy.get(s.id) ?? 0)),
     };
   });
 
@@ -137,8 +155,9 @@ export function buildHttpServer(opts: HttpServerOptions): BuiltHttpServer {
         session_id: req.params.id,
         limit: 20,
       });
+      const busy = await opts.service.busyCounts([session.id]);
       return {
-        ...serializeSession(session),
+        ...serializeSession(session, busy.get(session.id) ?? 0),
         recent_jobs: recent.items.map(serializeJob),
       };
     },
@@ -200,6 +219,98 @@ export function buildHttpServer(opts: HttpServerOptions): BuiltHttpServer {
     });
     // Don't return — keep the connection open.
     return reply;
+  });
+
+  // Pools ------------------------------------------------------------------
+  // A pool is a label family: `<pool>` and `<pool>-<n>`. Derived from the
+  // attached sessions, plus the fleet's pools (which may have 0 members).
+  fastify.get('/pools', async (req) => {
+    await requireAuth(req);
+    const attached = opts.sessions.list({ status: 'attached' }).filter((s) => s.label);
+    const busy = await opts.service.busyCounts(attached.map((s) => s.id));
+    const names = new Set<string>(attached.map((s) => poolOfLabel(s.label as string)));
+    for (const p of opts.fleet?.getSpec().pools ?? []) names.add(p.name);
+    const items = [...names].sort().map((name) => {
+      const members = attached
+        .filter((s) => s.label && poolOfLabel(s.label) === name)
+        .map((s) => ({
+          id: s.id,
+          label: s.label,
+          status: s.status,
+          busy: busy.get(s.id) ?? 0,
+          tui_state: s.tuiState ?? 'unknown',
+          managed: Boolean(s.managed),
+        }));
+      return {
+        name,
+        attached: members.length,
+        healthy: members.filter((m) => isHealthyTuiState(m.tui_state)).length,
+        busy: members.reduce((t, m) => t + m.busy, 0),
+        members,
+      };
+    });
+    return { items };
+  });
+
+  // Fleet (managed sessions) ------------------------------------------------
+  const fleet = (): FleetManager => {
+    if (!opts.fleet) throw new NotFoundError('fleet (disabled in config)');
+    return opts.fleet;
+  };
+  fastify.get('/fleet', async (req) => {
+    await requireAuth(req);
+    return fleet().status();
+  });
+  fastify.put('/fleet', async (req) => {
+    await requireAuth(req);
+    return { spec: fleet().setSpec(req.body ?? {}) };
+  });
+  fastify.post('/fleet/apply', async (req) => {
+    await requireAuth(req);
+    return fleet().apply();
+  });
+  fastify.post('/fleet/stop', async (req) => {
+    await requireAuth(req);
+    return fleet().stop();
+  });
+  fastify.post<{ Params: { label: string } }>('/fleet/sessions/:label/restart', async (req) => {
+    await requireAuth(req);
+    const { label } = FleetLabelParamSchema.parse(req.params);
+    return fleet().restart(label);
+  });
+
+  // Claude sign-in (long-lived setup-token for managed sessions) -------------
+  const auth = (): AuthManager => {
+    if (!opts.authManager) throw new NotFoundError('auth (fleet disabled in config)');
+    return opts.authManager;
+  };
+  fastify.get('/auth', async (req) => {
+    await requireAuth(req);
+    const bin = opts.claudeBin?.() ?? null;
+    return {
+      claude: { installed: Boolean(bin), path: bin, version: claudeVersion(bin) },
+      token: auth().token(),
+      login: auth().login(),
+    };
+  });
+  fastify.post('/auth/login', async (req) => {
+    await requireAuth(req);
+    return auth().start();
+  });
+  fastify.post('/auth/login/code', async (req) => {
+    await requireAuth(req);
+    const body = AuthCodeBodySchema.parse(req.body ?? {});
+    return auth().submitCode(body.code);
+  });
+  fastify.delete('/auth/login', async (req) => {
+    await requireAuth(req);
+    auth().cancel();
+    return { ok: true };
+  });
+  fastify.delete('/auth/token', async (req) => {
+    await requireAuth(req);
+    auth().removeToken();
+    return { ok: true };
   });
 
   // Jobs -------------------------------------------------------------------
@@ -355,15 +466,22 @@ function serializeJob(job: Job): Record<string, unknown> {
   };
 }
 
-function serializeSession(s: {
-  id: string;
-  label: string | null;
-  status: string;
-  pid: number | null;
-  registeredAt: number;
-  lastHeartbeatAt: number;
-  metadata: Record<string, string>;
-}): Record<string, unknown> {
+function serializeSession(
+  s: {
+    id: string;
+    label: string | null;
+    status: string;
+    pid: number | null;
+    registeredAt: number;
+    lastHeartbeatAt: number;
+    metadata: Record<string, string>;
+    tuiState?: string;
+    tuiDetail?: string | null;
+    tuiCheckedAt?: number | null;
+    managed?: boolean;
+  },
+  busy = 0,
+): Record<string, unknown> {
   return {
     id: s.id,
     label: s.label,
@@ -372,6 +490,12 @@ function serializeSession(s: {
     metadata: s.metadata,
     registered_at: toIso(s.registeredAt),
     last_heartbeat_at: toIso(s.lastHeartbeatAt),
+    // 0.6: what the session's terminal shows + load.
+    tui_state: s.tuiState ?? 'unknown',
+    tui_detail: s.tuiDetail ?? null,
+    tui_checked_at: s.tuiCheckedAt ? toIso(s.tuiCheckedAt) : null,
+    busy,
+    managed: Boolean(s.managed),
   };
 }
 

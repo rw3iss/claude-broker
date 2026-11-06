@@ -7,6 +7,8 @@ import { shimCommand } from './shim.js';
 import { updateCommand } from './update.js';
 import { logsCommand } from './logs.js';
 import { shellInitCommand } from './shell-init.js';
+import { fleetCommand, poolsCommand } from './fleet.js';
+import { authCommand } from './auth.js';
 import { packageVersion } from '../lib/version.js';
 
 const PKG_VERSION = packageVersion();
@@ -24,6 +26,9 @@ program.addCommand(configCommand());
 program.addCommand(updateCommand());
 program.addCommand(logsCommand());
 program.addCommand(shellInitCommand());
+program.addCommand(fleetCommand());
+program.addCommand(poolsCommand());
+program.addCommand(authCommand());
 
 program.parseAsync(process.argv).catch((err) => {
   console.error(err instanceof Error ? err.message : String(err));

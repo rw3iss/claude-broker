@@ -33,6 +33,10 @@ const zOptionalString = z.preprocess(
   z.string().min(1).optional(),
 );
 
+/** A string that falls back to `def()` when unset or "" (from `${VAR:-}`). Evaluated at parse time. */
+const zStringOr = (def: () => string) =>
+  z.preprocess((v) => (v === '' || v === null || v === undefined ? def() : v), z.string().min(1));
+
 export function defaultLogDir(): string {
   return path.join(os.homedir(), '.local', 'state', 'claude-broker', 'logs');
 }
@@ -81,11 +85,52 @@ export const AutoClearConfigSchema = z.object({
   command: zOptionalString,
 });
 
+/** TUI watcher: classify what each attached session's terminal shows (read-only). */
+export const TuiConfigSchema = z.object({
+  enabled: zBool.default(true),
+  check_interval_sec: z.coerce.number().int().positive().default(15),
+  /** Also read panes of sessions the fleet does not manage (found via pid → tmux pane). */
+  watch_unmanaged: zBool.default(true),
+});
+
+/** Nudge an idle session whose job sits `dispatched` without being picked up. */
+export const NudgeConfigSchema = z.object({
+  /** Nudge sessions the broker does NOT manage (types into foreign panes — opt in). */
+  enabled: zBool.default(false),
+  /** Nudge fleet-managed sessions (also gated by the fleet spec's `nudge`). */
+  managed: zBool.default(true),
+  after_sec: z.coerce.number().int().positive().default(20),
+  cooldown_sec: z.coerce.number().int().positive().default(60),
+  text: z
+    .string()
+    .min(1)
+    .default('There is a pending claude-broker job for you. Process it now and answer with complete_job.'),
+});
+
 export const BrokerConfigSchema = z.object({
   http: HttpConfigSchema,
   socket: SocketConfigSchema.default({}),
   defaults: BrokerDefaultsSchema.default({}),
   auto_clear: AutoClearConfigSchema.default({}),
+  tui: TuiConfigSchema.default({}),
+  nudge: NudgeConfigSchema.default({}),
+});
+
+/** Managed sessions (the fleet) + Claude sign-in. */
+export const FleetConfigSchema = z.object({
+  enabled: zBool.default(true),
+  /** The broker's PRIVATE tmux server (`tmux -L <socket>`). */
+  tmux_socket: zStringOr(() => 'claude-broker'),
+  tmux_session: zStringOr(() => 'claude-broker'),
+  spec_path: zStringOr(() => path.join(os.homedir(), '.config', 'claude-broker', 'fleet.json')),
+  state_dir: zStringOr(() => path.join(os.homedir(), '.local', 'state', 'claude-broker', 'fleet')),
+  /** CLAUDE_CODE_OAUTH_TOKEN env file (0600) every managed window sources. */
+  oauth_env: zStringOr(() => path.join(os.homedir(), '.config', 'claude-broker', 'oauth.env')),
+  /** Absolute path to `claude`; found automatically when unset. */
+  claude_bin: zOptionalString,
+  /** Override the shim command line written into session MCP configs. */
+  shim_command: zOptionalString,
+  check_interval_sec: z.coerce.number().int().positive().default(10),
 });
 
 export const SqliteStoreConfigSchema = z.object({
@@ -143,6 +188,7 @@ export const ConfigSchema = z.object({
   storage: StorageConfigSchema,
   dispatch: DispatchConfigSchema.default({ driver: 'inproc' }),
   logging: LoggingConfigSchema.default({}),
+  fleet: FleetConfigSchema.default({}),
   instructions: z.string().min(1),
   instructions_append: z.string().optional(),
 });

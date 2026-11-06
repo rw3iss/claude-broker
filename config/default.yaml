@@ -33,6 +33,37 @@ broker:
     # Or fully override the injection with your own command (gets CLAUDE_BROKER_CLEAR_KEYS,
     # CLAUDE_BROKER_SESSION_ID/LABEL/PID, CLAUDE_BROKER_TMUX_TARGET in its env):
     command: ${CLAUDE_BROKER_AUTO_CLEAR_COMMAND:-}
+  # TUI watcher (0.6): read what each attached session's terminal shows
+  # (ready / working / usage_limited / login_required / context_wedged /
+  # channels_unavailable …). Routing skips sessions that cannot work. Read-only
+  # for sessions the broker does not manage.
+  tui:
+    enabled: ${CLAUDE_BROKER_TUI_ENABLED:-true}
+    check_interval_sec: ${CLAUDE_BROKER_TUI_INTERVAL_SEC:-15}
+    watch_unmanaged: ${CLAUDE_BROKER_TUI_WATCH_UNMANAGED:-true}
+  # Nudge (0.6): an idle Claude TUI may not wake on a pushed job. When a job sits
+  # `dispatched` longer than after_sec and the pane shows the idle prompt, type
+  # `text` + Enter. On for fleet-managed sessions; opt in for your own panes.
+  nudge:
+    enabled: ${CLAUDE_BROKER_NUDGE_UNMANAGED:-false}
+    managed: ${CLAUDE_BROKER_NUDGE_MANAGED:-true}
+    after_sec: ${CLAUDE_BROKER_NUDGE_AFTER_SEC:-20}
+    cooldown_sec: ${CLAUDE_BROKER_NUDGE_COOLDOWN_SEC:-60}
+
+# Fleet (0.6): sessions the broker launches + supervises itself, in tmux windows
+# on its PRIVATE tmux server (`tmux -L claude-broker`). Spec: GET/PUT /fleet
+# (saved to spec_path). Sign-in: POST /auth/login (long-lived setup-token,
+# saved to oauth_env, 0600). Watch: `tmux -L claude-broker attach -t claude-broker`.
+fleet:
+  enabled: ${CLAUDE_BROKER_FLEET_ENABLED:-true}
+  tmux_socket: ${CLAUDE_BROKER_FLEET_TMUX_SOCKET:-claude-broker}
+  tmux_session: ${CLAUDE_BROKER_FLEET_TMUX_SESSION:-claude-broker}
+  spec_path: ${CLAUDE_BROKER_FLEET_SPEC:-}
+  state_dir: ${CLAUDE_BROKER_FLEET_STATE_DIR:-}
+  oauth_env: ${CLAUDE_BROKER_OAUTH_ENV:-}
+  claude_bin: ${CLAUDE_BROKER_CLAUDE_BIN:-}
+  shim_command: ${CLAUDE_BROKER_SHIM_COMMAND:-}
+  check_interval_sec: 10
 
 storage:
   job_store:
