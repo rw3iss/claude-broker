@@ -104,6 +104,10 @@ must be shared with any service that submits jobs.
   be at the main prompt to accept jobs. A shell running the CLI (`sessions list`,
   `jobs submit`) also needs `CLAUDE_BROKER_TOKEN` exported.
 
+> CLI commands read `CLAUDE_BROKER_*` (e.g. the token) from `~/.config/claude-broker/claude-broker.env`
+> (or `$CLAUDE_BROKER_ENV_FILE`) when they are not exported, so `claude-broker fleet status` works in a
+> plain shell on a box set up with that env file.
+
 ## Install
 
 One-liner installer (clones, builds, symlinks `claude-broker` into `~/.local/bin`):

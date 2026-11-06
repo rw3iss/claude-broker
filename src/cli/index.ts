@@ -10,6 +10,11 @@ import { shellInitCommand } from './shell-init.js';
 import { fleetCommand, poolsCommand } from './fleet.js';
 import { authCommand } from './auth.js';
 import { packageVersion } from '../lib/version.js';
+import { loadBrokerEnvFile } from '../lib/env-file.js';
+
+// CLI commands in a plain shell: take CLAUDE_BROKER_TOKEN etc. from the daemon's env
+// file (~/.config/claude-broker/claude-broker.env) when they are not exported.
+loadBrokerEnvFile();
 
 const PKG_VERSION = packageVersion();
 
