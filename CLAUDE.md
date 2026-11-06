@@ -68,6 +68,19 @@ the Claude Code "channels" MCP protocol. Two processes:
   (`src/cli/shell-init.ts`) resolve the same dir. The daemon sees only job
   in/out, never Claude's transcript — that's the `cll`/`script` layer.
 
+## Fleet / tmux safety (0.6)
+
+- Every tmux call the broker makes goes through `src/fleet/tmux.ts`: a PRIVATE
+  server (`tmux -L <fleet.tmux_socket>`) with `TMUX`/`TMUX_PANE` stripped. Inside
+  tmux, `$TMUX` makes a bare `tmux` command target the CURRENT server — a bare
+  `kill-server` from a test once killed an operator's whole tmux. Never add a
+  kill-server; tests use `tests/helpers/fake-tmux.ts` (it throws on kill-server).
+- Tests run with a throwaway `HOME` (`tests/setup/isolate-home.ts`), so nothing
+  touches the real fleet spec, token or `~/.claude.json`.
+- New pane states: add a fixture under `tests/fixtures/panes/` + a row in
+  `tests/unit/tui-state.spec.ts`, then the rule in `src/fleet/tui-state.ts`.
+- Never log or return the Claude token (`src/fleet/auth.ts`).
+
 ## What to read first
 
 1. README.md (user-facing overview)

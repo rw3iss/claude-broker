@@ -20,7 +20,8 @@ For a protocol-level walkthrough (HTTP → unix socket → MCP → Claude, end-t
 
 - Claude Code v2.1.80+ — sessions run with `--dangerously-load-development-channels server:claude-broker` and you accept its one-time prompt; the shim is a standard MCP server registered via `claude mcp add`.
 - Node.js 20+
-- `openssl` (to mint a token), and `claude` logged in to your account.
+- `openssl` (to mint a token), and `claude` logged in to your account (or signed in through `claude-broker auth login` for managed sessions).
+- `tmux` for managed sessions (the fleet) and for the TUI health watcher.
 
 ## Quick start
 
@@ -282,6 +283,73 @@ the shim:
 You can also pin the human-readable label via `CLAUDE_BROKER_SESSION_LABEL`.
 Multiple sessions may share the same label; submitters that target by label
 get a deterministic pick.
+
+## Managed sessions — the fleet (0.6)
+
+The daemon can launch and supervise its own Claude Code sessions, so you never
+hand-run `claude` in tmux again. Everything runs on the broker's **private tmux
+server** (`tmux -L claude-broker`) — it never touches your own tmux sessions.
+
+```bash
+# 1. Sign in once (long-lived `claude setup-token`, stored 0600 in ~/.config/claude-broker/oauth.env)
+claude-broker auth login            # prints a link; open it, sign in, paste the code back
+
+# 2. Say what to run, then start it
+cat > fleet.json <<'JSON'
+{ "pools": [ { "name": "general", "count": 1 }, { "name": "summary", "count": 2, "model": "haiku", "effort": "low" } ] }
+JSON
+claude-broker fleet set fleet.json
+claude-broker fleet apply           # starts general, summary-1, summary-2
+claude-broker fleet status          # per session: running, attached, tui_state, restarts, note
+
+# Watch / help a session by hand
+tmux -L claude-broker attach -t claude-broker
+```
+
+What the fleet does for every session (lessons from running 9 sessions for months):
+
+| Problem | What the fleet does |
+|---|---|
+| N sessions sharing `~/.claude/.credentials.json` refresh one token and blank it → "Login expired" | one long-lived `setup-token` token as `CLAUDE_CODE_OAUTH_TOKEN`, sourced inside each window from a 0600 file (never on a command line) |
+| the shim silently never starts when PATH lacks `~/.local/bin` | absolute shim path (`node <bin> shim`) in a per-session `--mcp-config` (`--strict-mcp-config`), PATH set in the window |
+| after `/clear` a worker "has no complete_job tool" | `ENABLE_TOOL_SEARCH=false` |
+| first-run dialogs (trust folder, bypass permissions, development channels) | working dir pre-trusted in `~/.claude.json`; dialogs answered automatically (moves to "Yes, I accept" / "I am using this for local development") |
+| a repo's CLAUDE.md rides along in every job | sessions start in a neutral dir (`<state>/workdir`) |
+| worker settings | per-session `--settings` file: `skipDangerousModePermissionPrompt`, `model`, `effortLevel`, auto-compact |
+| a window exits | respawned with backoff (5 s → 5 min) |
+| "Context limit reached" for every input | `/clear`, then respawn if still wedged after 30 s |
+| "Login expired" | reported; respawned as soon as a new token is saved |
+| usage limit menu / channel refused by Claude Code | reported (`tui_state`); routing skips the session |
+| an idle TUI doesn't wake on a pushed job | nudged: instruction typed + Enter when a job sits `dispatched` > 20 s |
+
+Spec (`~/.config/claude-broker/fleet.json`, or `PUT /fleet`):
+`{ pools: [{ name, count (1–16), model?, effort? }], cwd?, model?, effort?, autostart (true), nudge (true) }`.
+Labels: count 1 → `<name>`, else `<name>-1 … <name>-N`; session ids are `fleet-<label>`.
+With `autostart` the daemon applies the spec when it starts; managed windows keep
+running across a daemon restart and re-attach.
+
+## Pools and health-aware routing (0.6)
+
+`POST /jobs` takes `pool` as a third way to address work (exactly one of
+`session_id` | `session_label` | `pool`). A pool's members are the attached
+sessions labelled `<pool>` or `<pool>-<n>`. Label and pool routing pick the
+**least-busy healthy** attached session (ties → the one routed to least
+recently). Before 0.6 a label went to the FIRST attached session, so same-label
+sessions never shared work and a sick session kept receiving jobs.
+
+**Health** comes from the TUI watcher: every ~15 s the broker reads each
+attached session's pane (fleet windows directly; other sessions via their pid →
+tmux pane, read-only) and classifies it — `ready`, `working`, `prompt`,
+`starting`, `usage_limited`, `login_required`, `context_wedged`,
+`channels_unavailable`, `exited`, `unknown`. Five are unhealthy
+(`usage_limited`, `login_required`, `context_wedged`, `channels_unavailable`,
+`exited`) and skipped; `unknown` (no pane found) counts as healthy, so sessions
+you run outside tmux keep working as before.
+
+```bash
+claude-broker jobs submit --pool summary --content "…" --wait
+claude-broker pools        # per pool: attached, healthy, busy, members with tui_state
+```
 
 ## Submitting jobs
 
@@ -632,7 +700,23 @@ All variables read anywhere in the codebase, grouped by where they apply:
 | `GET` | `/sessions` | List sessions (`?status=`, `?label=`) |
 | `GET` | `/sessions/:id` | Inspect a session |
 | `DELETE` | `/sessions/:id` | Detach a session (does not kill Claude) |
-| `POST` | `/sessions/spawn` | Best-effort: spawns `claude` headless and waits for the shim to attach. A TUI may not initialise reliably headless — prefer starting `claude` yourself (tmux). |
+| `POST` | `/sessions/spawn` | Best-effort: spawns `claude` headless and waits for the shim to attach. A TUI may not initialise reliably headless — prefer the fleet (0.6). |
+| `GET` | `/pools` | 0.6 — pools (label families) with attached / healthy / busy and members |
+| `GET` | `/fleet` | 0.6 — spec, tmux + claude availability, every managed session |
+| `PUT` | `/fleet` | 0.6 — validate + save the spec (does not start anything) |
+| `POST` | `/fleet/apply` | 0.6 — start missing sessions, stop unwanted ones → `{ started, stopped, kept }` |
+| `POST` | `/fleet/stop` | 0.6 — close every managed window → `{ stopped }` |
+| `POST` | `/fleet/sessions/:label/restart` | 0.6 — respawn one managed session |
+| `GET` | `/auth` | 0.6 — `{ claude, token, login }` |
+| `POST` | `/auth/login` | 0.6 — start `claude setup-token` → `{ url }` |
+| `POST` | `/auth/login/code` | 0.6 — `{ code }` → `{ ok, token }`; bad code → 400 with `details: { retry, url }` |
+| `DELETE` | `/auth/login` | 0.6 — cancel a pending sign-in |
+| `DELETE` | `/auth/token` | 0.6 — delete the saved token |
+
+0.6 additions to existing endpoints: `POST /jobs` accepts `pool`; `GET /sessions`
+and `/sessions/:id` items carry `tui_state`, `tui_detail`, `tui_checked_at`,
+`busy`, `managed`; `/healthz` carries `capabilities: ["pools","fleet","auth","tui"]`
+(feature-detect on it).
 
 Schemas and full payload shapes: [docs/architecture.md](./docs/architecture.md).
 
@@ -647,6 +731,10 @@ claude-broker logs [session] [-n N|-f|--transcript|--all]
 claude-broker logs {list, clear [session] [--all] [--days-before N]}
 claude-broker shell-init [--name cll]       # print the cll transcript launcher
 claude-broker config {validate,show}
+claude-broker fleet {status,set <file>,apply,stop,restart <label>}   # 0.6 managed sessions
+claude-broker auth {status,login,cancel,logout}                      # 0.6 long-lived Claude token
+claude-broker pools                                                  # 0.6 pools with load + health
+claude-broker jobs submit --pool <pool>                              # 0.6 least-busy healthy member
 claude-broker update [--ref REF] [--remote] # git-pull + rebuild this install
 ```
 
@@ -720,6 +808,9 @@ or submit with `--mode fire-and-forget` so subsequent jobs don't serialize.
 - One broker per machine.
 - Serial-mode dispatch by default (one in-flight job per session).
 - Static bearer-token auth only.
+- Claude Code may refuse the channel for a newly started session ("Channels are not currently available" — a
+  gate on Claude Code's side, seen on v2.1.309 on 2026-11-05). The session still attaches (its MCP shim runs),
+  so the broker reports it as `tui_state: channels_unavailable` and routes around it; it cannot fix the gate.
 
 ## License
 
